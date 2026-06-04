@@ -13,7 +13,7 @@
 const GMAIL_ADDRESS  = 'santhosh.thiruchendru@straventis.com';   // Workspace Gmail to classify
 const GEMINI_API_KEY     = 'AQ.Ab8RN6KNYeTODluAOAHE3qwTDIcS4878w4ZdZwIHZk--dqM8Zw';
 const CRITERIA_FILE_NAME = 'label_criteria.json';  // must be in Google Drive root
-const BATCH_SIZE         = 20;
+const BATCH_SIZE         = 10;
 const GEMINI_MODEL       = 'gemini-2.5-flash';
 const MAX_LABELS         = 3;      // max labels per email
 const MIN_CONFIDENCE     = 0.75;   // only apply labels with confidence >= this (0.0 - 1.0)
@@ -78,6 +78,10 @@ function classifyNewEmails() {
   for (const cls of classifications) {
     const idx = parseInt(cls.id);
     if (isNaN(idx) || idx < 0 || idx >= batch.length) continue;
+   //log if an email is skipped
+    if (cls.labels.length === 0) {
+    Logger.log(`⚠ Skipped (no confident labels): ${emailData[idx]?.subject?.slice(0,55)}`);
+}
     try {
       for (const labelName of cls.labels) {
         batch[idx].addLabel(getOrCreateLabel(labelName));
@@ -247,4 +251,9 @@ function getOrCreateLabel(name) {
 function resetProcessed() {
   PropertiesService.getScriptProperties().deleteAllProperties();
   Logger.log('Reset complete.');
+}
+
+function resetEverything() {
+  PropertiesService.getScriptProperties().deleteAllProperties();
+  Logger.log('Full reset complete — all processed markers cleared.');
 }
