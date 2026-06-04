@@ -1,0 +1,6 @@
+.env
+*.env
+backups/
+node_modules/
+.DS_Store
+EOF
