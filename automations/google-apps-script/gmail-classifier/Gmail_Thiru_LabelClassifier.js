@@ -19,6 +19,8 @@ const MAX_LABELS         = 3;      // max labels per email
 const MIN_CONFIDENCE     = 0.75;   // only apply labels with confidence >= this (0.0 - 1.0)
 
 // ── LOAD LABEL CRITERIA FROM DRIVE ───────────────────────────────────────────
+
+// ── LOAD LABEL CRITERIA FROM DRIVE ───────────────────────────────────────────
 function loadLabelCriteria() {
   try {
     const files = DriveApp.getFilesByName(CRITERIA_FILE_NAME);
@@ -32,11 +34,11 @@ function loadLabelCriteria() {
     return null;
   }
 }
-
+ 
 function buildLabelDefs(labels) {
   return labels.map(l => `"${l.name}": ${l.criteria}`).join('\n\n');
 }
-
+ 
 // ── FILTER: apply confidence threshold and max label cap ─────────────────────
 function filterClassifications(classifications) {
   return classifications.map(cls => {
@@ -49,29 +51,29 @@ function filterClassifications(classifications) {
     return { id: cls.id, labels: filtered };
   });
 }
-
+ 
 // ── MAIN FUNCTION ─────────────────────────────────────────────────────────────
 function classifyNewEmails() {
   const labels = loadLabelCriteria();
   if (!labels) return;
-
+ 
   const labelNames = labels.map(l => l.name);
   const labelDefs  = buildLabelDefs(labels);
   // Track processed threads using Apps Script Properties (invisible — no label created)
   const props = PropertiesService.getScriptProperties();
-
+ 
   const threads = GmailApp.search('in:inbox', 0, BATCH_SIZE * 3).filter(t => !props.getProperty('p_' + t.getId()));
   const batch = threads.slice(0, BATCH_SIZE);
   if (threads.length === 0) { Logger.log('No new emails to classify.'); return; }
   Logger.log(`Found ${threads.length} unclassified threads.`);
-
+ 
   const emailData = buildEmailData(batch);
   const raw = callGemini(emailData, labelDefs, labelNames);
   if (!raw || raw.length === 0) { Logger.log('No classifications returned.'); return; }
-
+ 
   const classifications = filterClassifications(raw);
   Logger.log(`Gemini returned ${classifications.length} classifications.`);
-
+ 
   let done = 0, failed = 0;
   for (const cls of classifications) {
     const idx = parseInt(cls.id);
@@ -91,25 +93,49 @@ function classifyNewEmails() {
   }
   Logger.log(`\n✅ Done: ${done} classified, ${failed} failed.`);
 }
-
+ 
 // ── ONE-TIME: Classify ALL existing inbox emails ──────────────────────────────
+// Runs in 5-minute chunks — safe to run multiple times, picks up where it left off
+const MAX_RUNTIME_MS = 5 * 60 * 1000; // 5 minutes (Apps Script limit is 6)
+ 
 function classifyAllInbox() {
+  const startTime = Date.now();
   const labels = loadLabelCriteria();
   if (!labels) return;
-
+ 
   const labelNames = labels.map(l => l.name);
   const labelDefs  = buildLabelDefs(labels);
-  let start = 0, total = 0;
-
+  const props = PropertiesService.getScriptProperties();
+ 
+  // Resume from where we left off
+  let start = parseInt(props.getProperty('classifyAllInbox_start') || '0');
+  let total = parseInt(props.getProperty('classifyAllInbox_total') || '0');
+  Logger.log(`Resuming from position ${start}, ${total} emails classified so far.`);
+ 
   while (true) {
-    const props = PropertiesService.getScriptProperties();
-    const allThreads = GmailApp.search('in:inbox', start, BATCH_SIZE * 3).filter(t => !props.getProperty('p_' + t.getId()));
+    // Stop before hitting the 6-minute execution limit
+    if (Date.now() - startTime > MAX_RUNTIME_MS) {
+      props.setProperty('classifyAllInbox_start', String(start));
+      props.setProperty('classifyAllInbox_total', String(total));
+      Logger.log(`⏸ Paused at position ${start} — run classifyAllInbox again to continue. Total so far: ${total}`);
+      return;
+    }
+ 
+    const allThreads = GmailApp.search('in:inbox', start, BATCH_SIZE * 3)
+      .filter(t => !props.getProperty('p_' + t.getId()));
     const threads = allThreads.slice(0, BATCH_SIZE);
-    if (threads.length === 0) break;
-
+ 
+    if (threads.length === 0) {
+      // Clear resume state — we're done
+      props.deleteProperty('classifyAllInbox_start');
+      props.deleteProperty('classifyAllInbox_total');
+      Logger.log(`\n✅ Complete! ${total} emails classified.`);
+      return;
+    }
+ 
     const emailData = buildEmailData(threads);
     const raw = callGemini(emailData, labelDefs, labelNames);
-
+ 
     if (raw && raw.length > 0) {
       const classifications = filterClassifications(raw);
       for (const cls of classifications) {
@@ -124,14 +150,21 @@ function classifyAllInbox() {
         } catch(e) { Logger.log('Error: ' + e.message); }
       }
     }
-
+ 
     Logger.log(`Processed ${total} emails so far...`);
     Utilities.sleep(1500);
     start += BATCH_SIZE;
   }
-  Logger.log(`\n✅ Complete! ${total} emails classified.`);
 }
-
+ 
+// Run this to reset and start classifyAllInbox from scratch
+function resetClassifyAll() {
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty('classifyAllInbox_start');
+  props.deleteProperty('classifyAllInbox_total');
+  Logger.log('Reset complete — run classifyAllInbox to start from the beginning.');
+}
+ 
 // ── BUILD EMAIL DATA ──────────────────────────────────────────────────────────
 function buildEmailData(threads) {
   return threads.map((thread, i) => {
@@ -144,18 +177,18 @@ function buildEmailData(threads) {
     };
   });
 }
-
+ 
 // ── GEMINI API CALL ───────────────────────────────────────────────────────────
 function callGemini(emailData, labelDefs, labelNames) {
   const emailsText = emailData.map(e =>
     `ID: ${e.idx}\nFrom: ${e.from}\nSubject: ${e.subject}\nSnippet: ${e.snippet}`
   ).join('\n\n---\n\n');
-
+ 
   const prompt = `You are an email classifier. Classify each email and return ONLY a valid JSON array — no explanation, no markdown, no code fences.
-
+ 
 Available labels and their criteria:
 ${labelDefs}
-
+ 
 Rules:
 - Use EXACT label names including emojis: ${labelNames.map(n => `"${n}"`).join(', ')}
 - Assign a maximum of ${MAX_LABELS} labels per email
@@ -174,12 +207,12 @@ Rules:
   },
   ...
 ]
-
+ 
 Emails:
 ${emailsText}`;
-
+ 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-
+ 
   try {
     const response = UrlFetchApp.fetch(url, {
       method: 'POST',
@@ -190,10 +223,10 @@ ${emailsText}`;
       }),
       muteHttpExceptions: true
     });
-
+ 
     const data = JSON.parse(response.getContentText());
     if (data.error) { Logger.log('Gemini error: ' + JSON.stringify(data.error)); return null; }
-
+ 
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
     Logger.log('Gemini output (first 400 chars): ' + text.slice(0, 400));
     return JSON.parse(text.replace(/```json|```/g, '').trim());
@@ -202,7 +235,7 @@ ${emailsText}`;
     return null;
   }
 }
-
+ 
 // ── LABEL HELPER ─────────────────────────────────────────────────────────────
 function getOrCreateLabel(name) {
   let label = GmailApp.getUserLabelByName(name);
