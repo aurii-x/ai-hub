@@ -4,3 +4,4 @@ backups/
 node_modules/
 .DS_Store
 EOF
+Infra/.enc
