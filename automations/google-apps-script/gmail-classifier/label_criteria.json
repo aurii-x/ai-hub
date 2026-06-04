@@ -1,0 +1,60 @@
+{
+  "labels": [
+    {
+      "name": "ℹ️ FYI",
+      "criteria": "Apply if the email contains useful or important information that does not require action, response, follow-up, payment, scheduling, or tracking. Examples: product announcements from services I use, new features from software I use (Todoist, Rize, Databricks, Google, Apple, Notion), industry news, meeting acceptance notifications, event reminders for accepted events, certification announcements, educational content or webinar recordings useful later, product discounts from services I use when no immediate decision is required, informational notices from banks, utilities, healthcare, or schools that need no action. Do NOT apply FYI if: a response is requested, a payment is due, an appointment needs confirmation, a meeting invite needs acceptance, a deadline exists, the email requires monitoring, it belongs in Legal/Gov/Tax, it is primarily a receipt or archive record, or it is marketing from services I do not actively use."
+    },
+    {
+      "name": "⚡ Do Now",
+      "criteria": "Apply if the email requires my direct action — someone asks a question, requests a deliverable, needs my review or approval, or is pending my response. Includes job offers, thank-you note opportunities, and interview scheduling. Do NOT apply to: automated notifications, Google Drive/Calendar updates, newsletters, marketing, or informational thank-you messages."
+    },
+    {
+      "name": "✅ Task",
+      "criteria": "Apply if the email requires a specific action, decision, response, follow-up, attendance, review, approval, payment, or commitment from me and I would benefit from a Todoist task. Examples: requests to do something, interview scheduling, job offers, meeting invites requiring acceptance, payment due notices, overdue notices, credit card reminders, utility bills, subscription renewals, prescription pickups, package pickups, event registrations, product offers from services I actively use. Do NOT apply to: automated acknowledgements like application received, order confirmations, shipping notifications, processing notices, Drive/Calendar notifications, newsletters, marketing, general announcements, thank-you messages, paid receipts, or FYI-only emails."
+    },
+    {
+      "name": "🏛️ Gov & Tax",
+      "criteria": "Apply if the email is related to taxes, TurboTax (exclude newsletters), property tax, government notices, attorneys, legal matters, court filings, custody issues, government agencies (DMV, IRS, city, county, state, federal), permits, compliance notices, legal deadlines, or any matter with legal or regulatory implications."
+    },
+    {
+      "name": "👨‍👩‍👧 Fam",
+      "criteria": "Apply if the email is related to Elijah, Caleb, Nia, or Ami — school, activities, appointments, or family logistics, family events, doctor appointments, MyChart, utility service notices, HVAC service, or school announcements."
+    },
+    {
+      "name": "💳 Bills",
+      "criteria": "Apply if the email is about payments, invoices, billing, financial obligations, subscriptions, utilities, loans, insurance premiums, credit cards, mortgages, or accounts where money is owed, due, overdue, or scheduled for payment. Examples: payment due notices, overdue notices, credit card statements, utility bills, mortgage statements, property tax, insurance premiums, subscription renewals, invoice notifications, medical bills, school fees, loan reminders, auto-pay failures. Do NOT apply to: general bank account activity, fraud alerts, investment updates, marketing from financial institutions, promotional credit card offers, receipts for completed payments (unless future action needed), order confirmations with no outstanding balance, financial news. Special: if payment is due or overdue apply Bills + Task. If payment confirmed and complete apply Bills + Archive. If payment is processing apply Bills + Wait."
+    },
+    {
+      "name": "💼 Career",
+      "criteria": "Apply if the email is related to job searching, recruiting, interviews, employment opportunities, professional networking, consulting opportunities, or Straventis business development. Examples: job application confirmations, ATS emails from Workday, Ashby, Greenhouse, Lever, iCIMS, application status updates, rejection notifications, recruiter outreach, interview scheduling, offer letters, compensation discussions, networking outreach, Straventis consulting inquiries, SOW discussions, business development communications. Do NOT apply to: marketing emails from job boards, general career newsletters, mass recruiter spam, webinar promotions, training or certification emails, calendar notifications. Special: if action required apply Career + Task. If application under review apply Career + Wait. If rejection or closed role apply Career + Archive. If Straventis related also apply Straventis."
+    },
+    {
+      "name": "📅 Events",
+      "criteria": "Apply if the email involves meetings, appointments, calendar invitations, schedule changes, event registrations, school activities, church events, interviews, consulting meetings, conferences, or webinars I have registered for. Applies whether sent directly to me or to a group I belong to (parents, school families, sports teams, church groups, work teams). Do NOT apply to: marketing webinar invitations, promotional event ads, conference marketing, newsletters promoting events, product launch invitations to mailing lists, general event announcements I have not registered for. Special: if I need to accept, decline, attend, or prepare apply Events + Task. If confirmed and no action needed apply Events + Archive. If someone declines an event I organized apply Events + Wait. If time, date, location, or agenda changes apply Events + Task."
+    },
+    {
+      "name": "📚 Learning",
+      "criteria": "Apply if the email is directly related to education, training, certification, skill development, coursework, workshops, webinars, conferences, or subjects I am actively studying. Examples: Databricks Academy, certification programs, exam registrations, course enrollment confirmations, webinar registrations, training assignments, learning platforms like Coursera, Udemy, Pluralsight, LinkedIn Learning, Snowflake, AWS, Microsoft, Google Cloud, certification pass/fail, Credly badges, study materials. Do NOT apply if: the email is primarily marketing, a general newsletter with no active learning objective, a product announcement unrelated to my learning goals, or an event I have not registered for. Special: if exam deadline or required completion apply Learning + Task. If course completed or credential earned apply Learning + Archive. If educational content useful later but no action needed apply Learning + FYI."
+    },
+    {
+      "name": "📦 Products",
+      "criteria": "Apply if the email is about tools, subscriptions, or services I actively use — special offers, updates, pricing changes, or account notices. Examples: Todoist, Rize, Gmail, Apple Music, Setapp, and similar. Exclude newsletters from these services."
+    },
+    {
+      "name": "🗂️ Archive",
+      "criteria": "Apply if the email does not require action, response, follow-up, or ongoing tracking, but may be useful for future reference. Examples: receipts, purchase confirmations, successful payment confirmations, accepted appointment confirmations already on calendar, meeting acceptances, completed transactions, delivered shipments, account updates requiring no action, automated acknowledgements, successfully processed subscription renewals, statements and records. Do NOT apply if: a response is requested, a payment is due, an appointment needs confirmation, a meeting invite needs acceptance, a task is assigned, a deadline exists, a status needs monitoring, or the email belongs in Legal, Family, Career, Task, or Wait. When uncertain prefer Task or Wait over Archive."
+    },
+    {
+      "name": "🔇 Noise",
+      "criteria": "Apply if the email does not require action, tracking, follow-up, learning, or future reference, and primarily exists as marketing, promotion, solicitation, or unwanted informational content. Examples: webinar invitations I did not register for, product launch announcements, marketing campaigns, promotional offers from products I no longer use, sales emails, vendor outreach, recruiter spam unrelated to my skills, coupon offers, retail promotions, holiday sales, Uber/DoorDash/Lyft promotional offers, credit card ads, insurance ads, software marketing, newsletters I do not read, conference ads, product announcements from companies I do not use, affiliate marketing, survey requests from unknown organizations, cold sales outreach. Do NOT apply to: bills, payment reminders, legal or government communications, family or school communications, job applications or recruiters, consulting or Straventis communications, order confirmations, receipts, product offers from services I actively use, learning or certification communications, meeting invitations or appointment notifications."
+    },
+    {
+      "name": "⏳ Wait",
+      "criteria": "Apply if the email indicates a process is underway and I am waiting for another person, company, or system to take action. Examples: job applications under review, order confirmations, shipment notifications, support tickets, processing notices, application status updates, account verification in progress, acknowledgements that my request was received."
+    },
+    {
+      "name": "Straventis",
+      "criteria": "Apply if the email is specifically related to Straventis consulting — client emails, statements of work, invoices, project updates, or business development sent to or from santhosh.thiruchendru@straventis.com or referencing Straventis by name."
+    }
+  ]
+}
