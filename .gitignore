@@ -1,7 +1,12 @@
+# Secrets
 .env
 *.env
-backups/
-node_modules/
+# Database
+infra/lobehub-db/data/
+# Docker volumes
+volumes/
+data/
+# Mac
 .DS_Store
-EOF
-Infra/.enc
+infra/lobehub-db/data/
+infra/lobehub-db/.env
