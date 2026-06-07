@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Project Template</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-void:     #080808;
+    --bg-deep:     #0f0f0f;
+    --bg-surface:  #141414;
+    --bg-elevated: #1a1a1a;
+    --bg-hover:    #202020;
+    --border:      #2a2a2a;
+    --border-glow: #7c3aed44;
+    --purple:      #7c3aed;
+    --purple-bright:#a855f7;
+    --magenta:     #d946ef;
+    --blue-e:      #3b82f6;
+    --cyan:        #06b6d4;
+    --text-white:  #f8f8f8;
+    --text-gray:   #888;
+    --text-muted:  #444;
+    --glow-purple: 0 0 20px #7c3aed44, 0 0 40px #7c3aed22;
+    --glow-magenta:0 0 20px #d946ef44;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg-void);
+    color: var(--text-white);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Scanline overlay ─────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.03) 2px,
+      rgba(0,0,0,0.03) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  /* ── Page wrapper ─────────────────────────────── */
+  .page {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 60px 48px 120px;
+    position: relative;
+  }
+
+  /* ── Cover bar ────────────────────────────────── */
+  .cover {
+    height: 3px;
+    background: linear-gradient(90deg, var(--purple), var(--magenta), var(--blue-e));
+    margin-bottom: 48px;
+    border-radius: 0 0 2px 2px;
+    box-shadow: var(--glow-purple);
+    animation: shimmer 3s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    0%,100% { opacity: 1; }
+    50%      { opacity: 0.7; }
+  }
+
+  /* ── Icon + Title ─────────────────────────────── */
+  .page-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+    display: block;
+    filter: drop-shadow(0 0 12px #a855f766);
+  }
+
+  .page-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 52px;
+    letter-spacing: 0.04em;
+    color: var(--text-white);
+    line-height: 1;
+    margin-bottom: 32px;
+    text-shadow: 0 0 40px #a855f733;
+  }
+
+  /* ── Properties panel ─────────────────────────── */
+  .properties {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin-bottom: 40px;
+    position: relative;
+    overflow: hidden;
+  }
+  .properties::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--purple), transparent);
+  }
+
+  .prop-row {
+    display: flex;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    gap: 16px;
+  }
+  .prop-row:last-child { border-bottom: none; }
+
+  .prop-label {
+    width: 140px;
+    flex-shrink: 0;
+    color: var(--text-gray);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .prop-label i { font-size: 12px; color: var(--text-muted); }
+
+  .prop-value {
+    color: var(--text-white);
+    font-size: 13px;
+    font-weight: 400;
+  }
+
+  .prop-value.editable {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-white);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    cursor: text;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: background 0.2s;
+  }
+  .prop-value.editable:hover  { background: var(--bg-hover); }
+  .prop-value.editable:focus  { background: var(--bg-elevated); outline: 1px solid var(--border-glow); }
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 99px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+  }
+  .tag-purple { background: #7c3aed22; color: var(--purple-bright); border: 1px solid #7c3aed44; }
+  .tag-magenta { background: #d946ef22; color: #e879f9; border: 1px solid #d946ef44; }
+  .tag-blue   { background: #3b82f622; color: #60a5fa; border: 1px solid #3b82f644; }
+  .tag-cyan   { background: #06b6d422; color: #22d3ee; border: 1px solid #06b6d444; }
+  .tag-green  { background: #10b98122; color: #34d399; border: 1px solid #10b98144; }
+
+  /* ── Section heading ──────────────────────────── */
+  .section-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* ── Subpage list ─────────────────────────────── */
+  .subpage-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 40px;
+  }
+
+  .subpage-item {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    position: relative;
+    overflow: hidden;
+    gap: 12px;
+    text-decoration: none;
+  }
+  .subpage-item::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 2px;
+    background: var(--purple);
+    opacity: 0;
+    transition: opacity 0.2s;
+    box-shadow: var(--glow-purple);
+  }
+  .subpage-item:hover {
+    background: var(--bg-elevated);
+    border-color: #333;
+    transform: translateX(2px);
+  }
+  .subpage-item:hover::before { opacity: 1; }
+
+  .subpage-icon {
+    width: 28px;
+    height: 28px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    flex-shrink: 0;
+    transition: all 0.2s;
+  }
+  .subpage-item:hover .subpage-icon {
+    border-color: var(--purple);
+    box-shadow: 0 0 8px #7c3aed44;
+  }
+
+  .subpage-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .subpage-name {
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--text-white);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 2px;
+  }
+  .subpage-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .subpage-meta-dot {
+    width: 3px;
+    height: 3px;
+    background: var(--text-muted);
+    border-radius: 50%;
+  }
+
+  .subpage-tags {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  /* ── Open button ──────────────────────────────── */
+  .open-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-gray);
+    font-size: 11px;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+    text-transform: uppercase;
+  }
+  .open-btn:hover {
+    background: var(--purple);
+    border-color: var(--purple);
+    color: var(--text-white);
+    box-shadow: var(--glow-purple);
+    transform: scale(1.02);
+  }
+  .open-btn svg {
+    width: 10px;
+    height: 10px;
+    transition: transform 0.2s;
+  }
+  .open-btn:hover svg { transform: translate(1px, -1px); }
+
+  /* ── Add subpage row ──────────────────────────── */
+  .add-subpage {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 4px;
+  }
+  .add-subpage:hover {
+    border-color: var(--purple);
+    color: var(--purple-bright);
+    background: #7c3aed08;
+  }
+  .add-subpage-icon {
+    width: 20px;
+    height: 20px;
+    border: 1px dashed currentColor;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  /* ── Divider ──────────────────────────────────── */
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin: 32px 0;
+  }
+
+  /* ── Content block ────────────────────────────── */
+  .content-block {
+    color: #666;
+    font-size: 13px;
+    line-height: 1.8;
+    padding: 16px;
+    background: var(--bg-surface);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-style: italic;
+    margin-bottom: 32px;
+  }
+
+  /* ── Callout ──────────────────────────────────── */
+  .callout {
+    display: flex;
+    gap: 12px;
+    padding: 14px 16px;
+    background: #7c3aed0d;
+    border: 1px solid #7c3aed33;
+    border-radius: 6px;
+    margin-bottom: 24px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #c4b5fd;
+  }
+  .callout-icon { flex-shrink: 0; font-size: 16px; }
+
+  /* ── Stats row ────────────────────────────────── */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 32px;
+  }
+  .stat-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+    text-align: center;
+    transition: border-color 0.2s;
+  }
+  .stat-card:hover { border-color: var(--purple); }
+  .stat-n {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 28px;
+    letter-spacing: 0.04em;
+    color: var(--purple-bright);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .stat-l {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  /* ── Tooltip on open btn ──────────────────────── */
+  .open-btn[data-url]:hover::after {
+    content: 'Open page ↗';
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 4px);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    color: var(--text-gray);
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  /* ── Scrollbar ────────────────────────────────── */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg-void); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--purple); }
+
+  /* ── Fade in animation ────────────────────────── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .page-title   { animation: fadeUp 0.4s ease both; }
+  .properties   { animation: fadeUp 0.4s ease 0.1s both; }
+  .subpage-item { animation: fadeUp 0.3s ease both; }
+  .subpage-item:nth-child(1) { animation-delay: 0.15s; }
+  .subpage-item:nth-child(2) { animation-delay: 0.20s; }
+  .subpage-item:nth-child(3) { animation-delay: 0.25s; }
+  .subpage-item:nth-child(4) { animation-delay: 0.30s; }
+  .subpage-item:nth-child(5) { animation-delay: 0.35s; }
+  .subpage-item:nth-child(6) { animation-delay: 0.40s; }
+  .subpage-item:nth-child(7) { animation-delay: 0.45s; }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <div class="cover"></div>
+
+  <span class="page-icon">🏢</span>
+  <h1 class="page-title" contenteditable="true" spellcheck="false">PROJECT NAME</h1>
+
+  <!-- ── Properties panel ── -->
+  <div class="properties">
+    <div class="prop-row">
+      <div class="prop-label">
+        <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 7h18M3 12h18M3 17h18"/></svg>
+        Project Name
+      </div>
+      <input class="prop-value editable" type="text" value="Enter project name" placeholder="Enter project name">
+    </div>
+    <div class="prop-row">
+      <div class="prop-label">
+        <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+        Status
+      </div>
+      <div class="prop-value">
+        <span class="tag tag-purple">● Active</span>
+      </div>
+    </div>
+    <div class="prop-row">
+      <div class="prop-label">
+        <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        Created
+      </div>
+      <div class="prop-value" id="created-date" style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-gray)">—</div>
+    </div>
+    <div class="prop-row">
+      <div class="prop-label">
+        <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Company
+      </div>
+      <input class="prop-value editable" type="text" value="Harman" placeholder="Company name">
+    </div>
+    <div class="prop-row">
+      <div class="prop-label">
+        <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+        Tags
+      </div>
+      <div class="prop-value" style="display:flex;gap:6px;flex-wrap:wrap">
+        <span class="tag tag-magenta">Automotive</span>
+        <span class="tag tag-blue">ADAS</span>
+        <span class="tag tag-cyan">Active</span>
+      </div>
+    </div>
+    <div class="prop-row">
+      <div class="prop-label">
+        <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        Source DB
+      </div>
+      <input class="prop-value editable" type="text" value="CPMFordOnenote" placeholder="Source database name" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-gray)">
+    </div>
+  </div>
+
+  <!-- ── Stats row ── -->
+  <div class="stats">
+    <div class="stat-card">
+      <div class="stat-n" id="stat-pages">—</div>
+      <div class="stat-l">Sub-pages</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-n" style="color:#d946ef">2023</div>
+      <div class="stat-l">Start Year</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-n" style="color:#3b82f6">Q2</div>
+      <div class="stat-l">Quarter</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-n" style="color:#10b981">ON</div>
+      <div class="stat-l">Status</div>
+    </div>
+  </div>
+
+  <!-- ── Callout ── -->
+  <div class="callout">
+    <span class="callout-icon">📦</span>
+    <span>Moved from <strong>Harman Notebooks</strong> to <strong>06. Work</strong> on <span id="move-date">—</span> — all original journal properties retained.</span>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ── Sub-pages list ── -->
+  <div class="section-label">Sub-pages</div>
+
+  <div class="subpage-list" id="subpage-list">
+
+    <div class="subpage-item" onclick="openPage(this)">
+      <div class="subpage-icon">📋</div>
+      <div class="subpage-info">
+        <div class="subpage-name" contenteditable="true" spellcheck="false">Meeting Minutes — Project Kickoff</div>
+        <div class="subpage-meta">
+          <span>Nov 14, 2021</span>
+          <span class="subpage-meta-dot"></span>
+          <span>Meeting notes</span>
+        </div>
+      </div>
+      <div class="subpage-tags">
+        <span class="tag tag-purple">Meeting</span>
+      </div>
+      <button class="open-btn" title="Open page">
+        Open
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M1 9L9 1M9 1H4M9 1V6"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="subpage-item" onclick="openPage(this)">
+      <div class="subpage-icon">🔒</div>
+      <div class="subpage-info">
+        <div class="subpage-name" contenteditable="true" spellcheck="false">Security Asset Identification — Session 1</div>
+        <div class="subpage-meta">
+          <span>Nov 22, 2021</span>
+          <span class="subpage-meta-dot"></span>
+          <span>Security</span>
+        </div>
+      </div>
+      <div class="subpage-tags">
+        <span class="tag tag-blue">Security</span>
+      </div>
+      <button class="open-btn">
+        Open
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M1 9L9 1M9 1H4M9 1V6"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="subpage-item" onclick="openPage(this)">
+      <div class="subpage-icon">🔒</div>
+      <div class="subpage-info">
+        <div class="subpage-name" contenteditable="true" spellcheck="false">Security Asset Identification — Session 2</div>
+        <div class="subpage-meta">
+          <span>Dec 5, 2021</span>
+          <span class="subpage-meta-dot"></span>
+          <span>Security</span>
+        </div>
+      </div>
+      <div class="subpage-tags">
+        <span class="tag tag-blue">Security</span>
+      </div>
+      <button class="open-btn">
+        Open
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M1 9L9 1M9 1H4M9 1V6"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="subpage-item" onclick="openPage(this)">
+      <div class="subpage-icon">🛡️</div>
+      <div class="subpage-info">
+        <div class="subpage-name" contenteditable="true" spellcheck="false">SDL Security Concept Review</div>
+        <div class="subpage-meta">
+          <span>Jan 10, 2022</span>
+          <span class="subpage-meta-dot"></span>
+          <span>Review</span>
+        </div>
+      </div>
+      <div class="subpage-tags">
+        <span class="tag tag-magenta">Review</span>
+      </div>
+      <button class="open-btn">
+        Open
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M1 9L9 1M9 1H4M9 1V6"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="subpage-item" onclick="openPage(this)">
+      <div class="subpage-icon">📊</div>
+      <div class="subpage-info">
+        <div class="subpage-name" contenteditable="true" spellcheck="false">TARA Planning Session</div>
+        <div class="subpage-meta">
+          <span>Feb 3, 2022</span>
+          <span class="subpage-meta-dot"></span>
+          <span>Planning</span>
+        </div>
+      </div>
+      <div class="subpage-tags">
+        <span class="tag tag-cyan">Planning</span>
+      </div>
+      <button class="open-btn">
+        Open
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M1 9L9 1M9 1H4M9 1V6"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="subpage-item" onclick="openPage(this)">
+      <div class="subpage-icon">📝</div>
+      <div class="subpage-info">
+        <div class="subpage-name" contenteditable="true" spellcheck="false">TARA Kickoff Meeting</div>
+        <div class="subpage-meta">
+          <span>Mar 15, 2022</span>
+          <span class="subpage-meta-dot"></span>
+          <span>Meeting notes</span>
+        </div>
+      </div>
+      <div class="subpage-tags">
+        <span class="tag tag-purple">Meeting</span>
+      </div>
+      <button class="open-btn">
+        Open
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M1 9L9 1M9 1H4M9 1V6"/>
+        </svg>
+      </button>
+    </div>
+
+  </div>
+
+  <!-- Add sub-page row -->
+  <div class="add-subpage" onclick="addSubpage()">
+    <div class="add-subpage-icon">+</div>
+    <span>Add a sub-page</span>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Content area -->
+  <div class="section-label">Notes</div>
+  <div class="content-block" contenteditable="true" spellcheck="false">
+    Add project notes, context, or any additional information here…
+  </div>
+
+</div>
+
+<script>
+  // Set dates
+  var now = new Date();
+  var fmt = function(d) {
+    return d.toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric' });
+  };
+  document.getElementById('created-date').textContent = fmt(now);
+  document.getElementById('move-date').textContent    = fmt(now);
+  document.getElementById('stat-pages').textContent   = document.querySelectorAll('.subpage-item').length;
+
+  // Open page button
+  function openPage(item) {
+    var url = item.dataset.url;
+    if (url) {
+      window.open(url, '_blank');
+    } else {
+      // Flash the button to show it's interactive
+      var btn = item.querySelector('.open-btn');
+      if (btn) {
+        btn.style.background = 'var(--purple)';
+        btn.style.borderColor = 'var(--purple)';
+        btn.style.color = '#fff';
+        setTimeout(function() {
+          btn.style.background = '';
+          btn.style.borderColor = '';
+          btn.style.color = '';
+        }, 300);
+      }
+    }
+  }
+
+  // Prevent click on button from firing row click
+  document.querySelectorAll('.open-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var item = btn.closest('.subpage-item');
+      var url  = item && item.dataset.url;
+      if (url) window.open(url, '_blank');
+      else {
+        btn.textContent = '✓';
+        setTimeout(function() {
+          btn.innerHTML = 'Open <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 9L9 1M9 1H4M9 1V6"/></svg>';
+        }, 600);
+      }
+    });
+  });
+
+  // Add subpage
+  function addSubpage() {
+    var list = document.getElementById('subpage-list');
+    var item = document.createElement('div');
+    item.className = 'subpage-item';
+    item.style.animation = 'fadeUp 0.3s ease both';
+    item.innerHTML = [
+      '<div class="subpage-icon">📄</div>',
+      '<div class="subpage-info">',
+        '<div class="subpage-name" contenteditable="true" spellcheck="false">Untitled</div>',
+        '<div class="subpage-meta"><span>' + fmt(new Date()) + '</span></div>',
+      '</div>',
+      '<button class="open-btn">Open <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 9L9 1M9 1H4M9 1V6"/></svg></button>',
+    ].join('');
+    list.appendChild(item);
+
+    // Focus the name
+    setTimeout(function() {
+      var name = item.querySelector('.subpage-name');
+      name.focus();
+      var range = document.createRange();
+      range.selectNodeContents(name);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(range);
+    }, 50);
+
+    document.getElementById('stat-pages').textContent = document.querySelectorAll('.subpage-item').length;
+
+    // Wire open button
+    item.querySelector('.open-btn').addEventListener('click', function(e) {
+      e.stopPropagation();
+    });
+    item.addEventListener('click', function() { openPage(item); });
+  }
+
+  // To link a subpage to a Notion URL, set data-url on the item:
+  // <div class="subpage-item" data-url="https://notion.so/your-page-id">
+</script>
+
+</body>
+</html>
