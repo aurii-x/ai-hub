@@ -14,3 +14,16 @@ build/
 
 # Logs
 *.log
+=======
+# Secrets
+.env
+*.env
+# Database
+infra/lobehub-db/data/
+# Docker volumes
+volumes/
+data/
+# Mac
+.DS_Store
+infra/lobehub-db/data/
+infra/lobehub-db/.env

@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: santhoshos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: santhoshos
+      POSTGRES_USER: santhoshos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - santhoshos_postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  lobechat:
+    image: lobehub/lobe-chat:latest
+    container_name: santhoshos-lobechat
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    env_file:
+      - .env
+    environment:
+      ACCESS_CODE: ${ACCESS_CODE}
+      DATABASE_URL: postgres://santhoshos:${POSTGRES_PASSWORD}@postgres:5432/santhoshos
+    ports:
+      - "3210:3210"
+
+volumes:
+  santhoshos_postgres:
