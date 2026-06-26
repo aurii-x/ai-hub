@@ -2,18 +2,17 @@
 // GLOBAL USER ENVIRONMENT CONFIGURATION
 // =============================================================================
 const START_DATE_OVERRIDE = "2026-01-01"; 
-const END_DATE_OVERRIDE   = "2026-02-28"; 
+const END_DATE_OVERRIDE   = "2026-01-31"; 
 const CLEAN_TAB_NAME      = 'Rize_Clean_Sync';
 const TARGET_FOLDER_PATH  = ['AppData', '3.1 clickup-automation']; 
 const BASE_FILENAME       = 'ClickUp-Rize Sync';         
 const INCLUDE_CLOSED_TASKS = true;
-const TIME_BUFFER_MS      = 25000;        // 25-second execution safety margin
-//const MAX_RUNTIME_MS      = 330000;       // 5.5 minutes — leaves headroom under 6-min hard limit
-//const OVERLAP_TOLERANCE_MS = 5000;        // 5-second tolerance for overlap detection
-//const SYNC_DELAY_SECONDS  = 1;            // seconds to wait between ClickUp POST calls
+const TIME_BUFFER_MS      = 25000;
+//const MAX_RUNTIME_MS      = 330000;
 
 // =============================================================================
 // STEP 1: Extract Rize entries into staging — IDEMPOTENT VERSION
+//
 // KEY CHANGES FROM ORIGINAL:
 //   • No longer archives and recreates the workbook on every run.
 //   • Opens the existing workbook if it already exists (creates once on first run).
@@ -271,7 +270,7 @@ function runStep3a_DiagnosticClickUpMatcher() {
 
     let matchStatus = 'New Entry';
     for (const cuEntry of liveEntries) {
-      const isOverlapping = Math.max(startMs, cuEntry.start) < Math.min(endMs, cuEntry.end) + OVERLAP_TOLERANCE_MS;
+      const isOverlapping = Math.max(startMs, cuEntry.start) < Math.min(endMs, cuEntry.end) + 5000;
       if (isOverlapping) {
         const durationDiff = Math.abs(durationMs - cuEntry.duration);
         const startDiff    = Math.abs(startMs - cuEntry.start);
@@ -314,18 +313,39 @@ function runStep3b_ActiveClickUpSyncLoader() {
   const cleanData = cleanSheet.getDataRange().getValues();
   if (cleanData.length <= 2) { Logger.log('🏁 Step 3b: No records to sync.'); return; }
 
-  let successCount = 0, skippedCount = 0, errorCount = 0;
+  // ── Live entry cache: task id → existing ClickUp time entries ──────────────
+  // Fetched lazily on first encounter per task, so we only pay the API cost for
+  // tasks that actually have rows to process. This makes Step 3b independently
+  // idempotent — it never posts a duplicate even if Step 3a missed it or if a
+  // previous run timed out before writing the Synced Successfully status.
+  const liveEntryCache = {};
+
+  function getOrFetchLiveEntries(taskId) {
+    if (!liveEntryCache[taskId]) {
+      liveEntryCache[taskId] = fetchLiveClickUpTimeEntriesArray(taskId, cuToken, cuTeamId);
+    }
+    return liveEntryCache[taskId];
+  }
+
+  function hasOverlap(taskId, startMs, endMs) {
+    const existing = getOrFetchLiveEntries(taskId);
+    return existing.some(e => {
+      const overlapMs = Math.min(endMs, e.end) - Math.max(startMs, e.start);
+      return overlapMs > 5000; // more than 5-second overlap = duplicate
+    });
+  }
+
+  let successCount = 0, skippedCount = 0, liveSkipCount = 0, errorCount = 0;
 
   for (let i = 2; i < cleanData.length; i++) {
     const row = cleanData[i];
 
     const startMs       = Number(row[0]);
     const endMs         = Number(row[1]);
-    const description   = String(row[3]);
     const matchedTaskId = String(row[7]);
     const currentStatus = String(row[11] || '');
 
-    // ── IDEMPOTENCY: only process rows 3a confirmed as new, or prior errors ──
+    // ── Sheet-level skip: rows already confirmed done ──────────────────────
     if (currentStatus !== 'New Entry' && !currentStatus.startsWith('API Error')) {
       skippedCount++;
       continue;
@@ -337,19 +357,28 @@ function runStep3b_ActiveClickUpSyncLoader() {
       continue;
     }
 
+    if (!isValidMs(startMs) || !isValidMs(endMs)) {
+      skippedCount++;
+      continue;
+    }
+
     // Runtime ceiling check
     if (Date.now() - t0 > MAX_RUNTIME_MS - TIME_BUFFER_MS) {
       Logger.log('⚠️ Approaching runtime ceiling — halting safely. Re-run Step 3b to continue.');
       break;
     }
 
-    // ── UNLIMITED-PLAN-SAFE PAYLOAD: tid + start + stop only ────────────────
-    const payload = {
-      tid:   matchedTaskId,
-      start: startMs,
-      stop:  endMs,
-    };
+    // ── Live duplicate check: verify against ClickUp before posting ────────
+    if (hasOverlap(matchedTaskId, startMs, endMs)) {
+      liveSkipCount++;
+      cleanSheet.getRange(i + 1, 12).setValue('Already Matched').setBackground('#D9EAD3').setFontColor('#274E13');
+      SpreadsheetApp.flush();
+      Logger.log(`⏭ Row ${i + 1} already exists in ClickUp — skipped`);
+      continue;
+    }
 
+    // ── POST time entry ────────────────────────────────────────────────────
+    const payload = { tid: matchedTaskId, start: startMs, stop: endMs };
     const url = `https://api.clickup.com/api/v2/team/${cuTeamId}/time_entries`;
     try {
       const response = UrlFetchApp.fetch(url, {
@@ -362,10 +391,12 @@ function runStep3b_ActiveClickUpSyncLoader() {
       const code = response.getResponseCode();
       if (code === 200 || code === 201) {
         successCount++;
+        // Add to local cache so later rows for the same task don't duplicate
+        liveEntryCache[matchedTaskId].push({ start: startMs, end: endMs });
         cleanSheet.getRange(i + 1, 12).setValue('Synced Successfully').setBackground('#E2EFDA').setFontColor('#375623');
         SpreadsheetApp.flush();
         Logger.log(`✅ Row ${i + 1} synced`);
-        Utilities.sleep(SYNC_DELAY_SECONDS * 1000);
+        Utilities.sleep(1000);
       } else {
         errorCount++;
         const errText = response.getContentText().substring(0, 200);
@@ -381,7 +412,7 @@ function runStep3b_ActiveClickUpSyncLoader() {
     }
   }
 
-  Logger.log(`🏁 Step 3b complete. Synced: ${successCount}, Skipped: ${skippedCount}, Errors: ${errorCount}`);
+  Logger.log(`🏁 Step 3b complete. Synced: ${successCount}, Sheet-skipped: ${skippedCount}, Live-deduped: ${liveSkipCount}, Errors: ${errorCount}`);
 }
 
 // =============================================================================
@@ -775,6 +806,8 @@ function runStep0_DeleteTrackedTimeInWindow() {
 // (it's the Rize task, not the time entry) — the first non-N/A value is used.
 // =============================================================================
 
+
+
 /**
  * Diagnostic: logs all custom fields and their IDs for every task in the
  * clean sheet. Run this once to find the field IDs to paste above.
@@ -835,7 +868,11 @@ function discoverCustomFieldIds() {
   }
 
   Logger.log(`✅ Discovery complete. Found ${seenFieldIds.size} unique custom fields.`);
-  Logger.log('   Copy the Field IDs above into CUSTOM_FIELD_ID_RIZE_TIME_ENTRY and CUSTOM_FIELD_ID_RIZE_TASK at the top of Step 4.');
+  Logger.log('   Copy the Field IDs above, then save them to Script Properties:');
+  Logger.log('   PropertiesService.getScriptProperties().setProperties({');
+  Logger.log('     CUSTOM_FIELD_ID_RIZE_TIME_ENTRY: "paste-id-here",');
+  Logger.log('     CUSTOM_FIELD_ID_RIZE_TASK: "paste-id-here"');
+  Logger.log('   });');
 }
 
 /**
@@ -848,9 +885,16 @@ function runStep4_WriteRizeIdsToCustomFields() {
   const cuToken = props.getProperty('CLICKUP_TOKEN');
   if (!cuToken) { Logger.log('❌ CLICKUP_TOKEN missing.'); return; }
 
-  if (!CUSTOM_FIELD_ID_RIZE_TIME_ENTRY || !CUSTOM_FIELD_ID_RIZE_TASK) {
-    Logger.log('❌ CUSTOM_FIELD_ID_RIZE_TIME_ENTRY and/or CUSTOM_FIELD_ID_RIZE_TASK are empty.');
-    Logger.log('   Run discoverCustomFieldIds() first to find the correct IDs, then paste them in.');
+  const fieldIdTimeEntry = props.getProperty('CUSTOM_FIELD_ID_RIZE_TIME_ENTRY') || '';
+  const fieldIdTask      = props.getProperty('CUSTOM_FIELD_ID_RIZE_TASK')       || '';
+
+  if (!fieldIdTimeEntry || !fieldIdTask) {
+    Logger.log('❌ Custom field IDs not set in Script Properties.');
+    Logger.log('   Run discoverCustomFieldIds(), then save the IDs:');
+    Logger.log('   PropertiesService.getScriptProperties().setProperties({');
+    Logger.log('     CUSTOM_FIELD_ID_RIZE_TIME_ENTRY: "paste-id-here",');
+    Logger.log('     CUSTOM_FIELD_ID_RIZE_TASK: "paste-id-here"');
+    Logger.log('   });');
     return;
   }
 
@@ -908,7 +952,7 @@ function runStep4_WriteRizeIdsToCustomFields() {
     Logger.log(`📝 Task ${clickupTaskId}: entry_ids="${entryIdValue}" task_id="${taskIdValue}"`);
 
     // Write rize_time_entry_id custom field
-    const entryResult = writeCustomField(clickupTaskId, CUSTOM_FIELD_ID_RIZE_TIME_ENTRY, entryIdValue, cuToken);
+    const entryResult = writeCustomField(clickupTaskId, fieldIdTimeEntry, entryIdValue, cuToken);
     if (!entryResult.ok) {
       Logger.log(`🚨 Failed to write rize_time_entry_id on task ${clickupTaskId}: ${entryResult.error}`);
       errorCount++;
@@ -917,7 +961,7 @@ function runStep4_WriteRizeIdsToCustomFields() {
 
     // Write rize_task_id custom field
     if (taskIdValue) {
-      const taskResult = writeCustomField(clickupTaskId, CUSTOM_FIELD_ID_RIZE_TASK, taskIdValue, cuToken);
+      const taskResult = writeCustomField(clickupTaskId, fieldIdTask, taskIdValue, cuToken);
       if (!taskResult.ok) {
         Logger.log(`🚨 Failed to write rize_task_id on task ${clickupTaskId}: ${taskResult.error}`);
         errorCount++;
@@ -1433,8 +1477,6 @@ function runStep5b_InjectAdditionalMapping() {
   Logger.log(`Total runtime: ${((Date.now() - t0) / 1000).toFixed(2)}s`);
 }
 
-
-
 // =============================================================================
 // DIAGNOSTIC: Time Entry Audit
 //
@@ -1449,39 +1491,37 @@ function runStep5b_InjectAdditionalMapping() {
 // ClickUp-Rize Sync workbook — one row per issue, color-coded by type.
 // Re-running clears and rewrites the tab so it always shows the latest state.
 // =============================================================================
- 
-const START_AUDIT_DATE      = '2026-01-01'; // audit window start — change per run
-const END_AUDIT_DATE        = '2026-01-31'; // audit window end   — change per run
+
 const OVERLAP_THRESHOLD_MS  = 2 * 60 * 1000;
 const TOO_LONG_THRESHOLD_MS = 4 * 60 * 60 * 1000;
- 
+
 const AUDIT_COLORS = {
   DUPLICATE:   { bg: 'FFE599', fg: '7F6000' }, // yellow
   OVERLAP:     { bg: 'F9CB9C', fg: '7F3F00' }, // orange
   CONFLICTING: { bg: 'EA9999', fg: '660000' }, // red
   'TOO LONG':  { bg: 'A4C2F4', fg: '1C4587' }, // blue
 };
- 
+
 function runDiagnostic_TimeEntryAudit() {
   const t0 = Date.now();
   const props  = PropertiesService.getScriptProperties();
   const token  = props.getProperty('CLICKUP_TOKEN');
   const teamId = props.getProperty('CLICKUP_TEAM_ID');
   if (!token || !teamId) { Logger.log('❌ CLICKUP_TOKEN or CLICKUP_TEAM_ID missing.'); return; }
- 
-  const startMs = new Date(START_AUDIT_DATE + 'T00:00:00Z').getTime();
-  const endMs   = new Date(END_AUDIT_DATE   + 'T23:59:59Z').getTime();
- 
-  Logger.log(`🔍 Time Entry Audit — ${START_AUDIT_DATE} → ${END_AUDIT_DATE}`);
+
+  const startMs = new Date(START_DATE_OVERRIDE + 'T00:00:00Z').getTime();
+  const endMs   = new Date(END_DATE_OVERRIDE   + 'T23:59:59Z').getTime();
+
+  Logger.log(`🔍 Time Entry Audit — ${START_DATE_OVERRIDE} → ${END_DATE_OVERRIDE}`);
   Logger.log('Fetching all time entries...');
- 
+
   const allEntries = fetchAllTimeEntriesTeamWide(teamId, token, startMs, endMs, t0);
   Logger.log(`Total entries fetched: ${allEntries.length}`);
- 
+
   if (allEntries.length === 0) {
     Logger.log('No time entries found in this window.'); return;
   }
- 
+
   // ── Group by task ─────────────────────────────────────────────────────────
   const byTask = {};
   for (const e of allEntries) {
@@ -1489,13 +1529,13 @@ function runDiagnostic_TimeEntryAudit() {
     if (!byTask[tid]) byTask[tid] = { name: e.task_name || '(no task)', entries: [] };
     byTask[tid].entries.push(e);
   }
- 
+
   // ── Run checks, collect issues ─────────────────────────────────────────────
   const issues = []; // { type, taskId, taskName, entryIds, start, end, detail }
- 
+
   for (const [tid, { name, entries }] of Object.entries(byTask)) {
     const sorted = entries.slice().sort((a, b) => a.start - b.start);
- 
+
     for (const e of sorted) {
       // CONFLICTING
       if (e.end < e.start) {
@@ -1511,19 +1551,19 @@ function runDiagnostic_TimeEntryAudit() {
           detail: `Duration: ${fmtDur(dur)}` });
       }
     }
- 
+
     for (let i = 0; i < sorted.length; i++) {
       for (let j = i + 1; j < sorted.length; j++) {
         const a = sorted[i], b = sorted[j];
         if (b.start > a.end + OVERLAP_THRESHOLD_MS) break;
- 
+
         if (a.start === b.start && a.end === b.end) {
           issues.push({ type: 'DUPLICATE', taskId: tid, taskName: name,
             entryIds: `${a.id}, ${b.id}`, start: a.start, end: a.end,
             detail: `Identical entries: ${fmtTs(a.start)} → ${fmtTs(a.end)}` });
           continue;
         }
- 
+
         const overlapMs = Math.min(a.end, b.end) - Math.max(a.start, b.start);
         if (overlapMs > OVERLAP_THRESHOLD_MS) {
           issues.push({ type: 'OVERLAP', taskId: tid, taskName: name,
@@ -1533,12 +1573,12 @@ function runDiagnostic_TimeEntryAudit() {
       }
     }
   }
- 
+
   // ── Write to sheet ────────────────────────────────────────────────────────
   const sheet = getOrCreateAuditSheet();
   sheet.clearContents();
   sheet.clearFormats();
- 
+
   // Header
   const headers = ['Type', 'Task ID', 'Task Name', 'Entry ID(s)',
                    'Start', 'End', 'Detail', 'Task URL'];
@@ -1549,7 +1589,7 @@ function runDiagnostic_TimeEntryAudit() {
       .setFontFamily('Arial').setFontSize(10);
   widths.forEach((w, i) => sheet.setColumnWidth(i + 1, w));
   sheet.setFrozenRows(1);
- 
+
   if (issues.length === 0) {
     sheet.appendRow(['✅ No issues found', '', '', '', '', '', '', '']);
     sheet.getRange(2, 1, 1, 8).setFontWeight('bold').setFontColor('#274E13')
@@ -1558,7 +1598,7 @@ function runDiagnostic_TimeEntryAudit() {
     // Sort: CONFLICTING first, then OVERLAP, DUPLICATE, TOO LONG
     const order = { CONFLICTING: 0, OVERLAP: 1, DUPLICATE: 2, 'TOO LONG': 3 };
     issues.sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9));
- 
+
     const matrix = issues.map(iss => [
       iss.type,
       iss.taskId,
@@ -1570,7 +1610,7 @@ function runDiagnostic_TimeEntryAudit() {
       `https://app.clickup.com/t/${iss.taskId}`,
     ]);
     sheet.getRange(2, 1, matrix.length, headers.length).setValues(matrix);
- 
+
     // Color-code each row by type
     for (let r = 0; r < matrix.length; r++) {
       const type   = matrix[r][0];
@@ -1586,14 +1626,14 @@ function runDiagnostic_TimeEntryAudit() {
       sheet.getRange(r + 2, 7).setWrap(true);
     }
   }
- 
+
   sheet.autoResizeColumns(1, 7);
   sheet.setColumnWidth(8, 100); // URL col — fixed
- 
+
   // Summary row at the bottom
   const counts = { DUPLICATE: 0, OVERLAP: 0, CONFLICTING: 0, 'TOO LONG': 0 };
   issues.forEach(iss => { if (counts[iss.type] !== undefined) counts[iss.type]++; });
-  sheet.appendRow([]);
+  sheet.appendRow(['']);
   sheet.appendRow([
     `TOTAL: ${issues.length} issues`,
     `Duplicates: ${counts.DUPLICATE}`,
@@ -1608,17 +1648,16 @@ function runDiagnostic_TimeEntryAudit() {
   sheet.getRange(sumRow, 1, 1, 8)
       .setFontWeight('bold').setBackground('#EFEFEF')
       .setFontFamily('Arial').setFontSize(10);
- 
+
   const summary = `✅ Audit complete — ${issues.length} issues found `
     + `(Dup: ${counts.DUPLICATE}, Overlap: ${counts.OVERLAP}, `
     + `Conflict: ${counts.CONFLICTING}, Long: ${counts['TOO LONG']}). `
     + `Runtime: ${((Date.now() - t0) / 1000).toFixed(1)}s`;
   Logger.log(summary);
-  notify(summary);
 }
- 
+
 function getOrCreateAuditSheet() {
-  const folder = getFolder();
+  const folder = resolveOrCreateFolderPath(TARGET_FOLDER_PATH);
   const files  = folder.getFilesByName(WORKBOOK_NAME);
   let ss;
   if (files.hasNext()) {
@@ -1630,13 +1669,13 @@ function getOrCreateAuditSheet() {
   const TAB = 'Time Entry Audit';
   return ss.getSheetByName(TAB) || ss.insertSheet(TAB);
 }
- 
+
 // ── Fetch all time entries team-wide with pagination ─────────────────────────
 function fetchAllTimeEntriesTeamWide(teamId, token, startMs, endMs, t0) {
   const all = [];
   let page  = 0;
   const PAGE_SIZE = 100;
- 
+
   while (true) {
     if (Date.now() - t0 > MAX_RUNTIME_MS - TIME_BUFFER_MS) {
       Logger.log(`⚠️ Runtime limit hit at page ${page} (${all.length} entries). Re-run to continue.`);
@@ -1672,13 +1711,13 @@ function fetchAllTimeEntriesTeamWide(teamId, token, startMs, endMs, t0) {
   }
   return all;
 }
- 
+
 // ── Formatters ────────────────────────────────────────────────────────────────
 function fmtTs(ms) {
   if (!ms || isNaN(ms)) return '(invalid)';
   return Utilities.formatDate(new Date(ms), 'America/New_York', 'yyyy-MM-dd HH:mm:ss');
 }
- 
+
 function fmtDur(ms) {
   if (!ms || isNaN(ms)) return '?';
   const totalMin = Math.floor(Math.abs(ms) / 60000);
