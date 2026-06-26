@@ -8,7 +8,7 @@ const TARGET_FOLDER_PATH  = ['AppData', '3.1 clickup-automation'];
 const BASE_FILENAME       = 'ClickUp-Rize Sync';         
 const INCLUDE_CLOSED_TASKS = true;
 const TIME_BUFFER_MS      = 25000;
-//const MAX_RUNTIME_MS      = 330000;
+const MAX_RUNTIME_MS      = 330000;
 
 // =============================================================================
 // STEP 1: Extract Rize entries into staging — IDEMPOTENT VERSION
@@ -651,7 +651,7 @@ function formatMsToHumanReadable(ms) {
 //   • Confirms count before proceeding so you can abort if the number looks wrong
 // =============================================================================
 
-const DRY_RUN_STEP0 = true; // ← SET TO FALSE ONLY AFTER CONFIRMING DRY RUN OUTPUT
+const DRY_RUN_STEP0 = false; // ← SET TO FALSE ONLY AFTER CONFIRMING DRY RUN OUTPUT
 
 function runStep0_DeleteTrackedTimeInWindow() {
   const t0 = Date.now();
@@ -786,6 +786,107 @@ function runStep0_DeleteTrackedTimeInWindow() {
   Logger.log(`\n🏁 Step 0 complete.`);
   Logger.log(`   Deleted: ${deletedCount} | Errors: ${errorCount} | Clean sheet rows reset: ${resetCount}`);
   Logger.log(`   Next: run Step 3a → Step 3b to re-sync cleanly.`);
+}
+
+// =============================================================================
+// STEP 0b: Delete ONLY duplicate time entries — leaves the first copy intact
+//
+// Unlike Step 0 which deletes everything in the window, this function:
+//   1. Fetches all time entries team-wide for the configured date window
+//   2. Groups them by task
+//   3. Sorts each group by entry ID ascending (oldest first as a proxy for
+//      creation order) — the first entry per overlap group is kept
+//   4. Flags later entries whose start/end overlaps an already-kept entry by
+//      more than 5 seconds → these are the duplicates to remove
+//   5. Deletes ONLY the duplicates — the original entry on each task is
+//      preserved exactly as-is
+//
+// After running this you do NOT need to re-run Steps 1, 2, or 3a.
+// The clean sheet already has the correct entries marked Synced Successfully.
+// Step 3b's new live duplicate check will prevent this from recurring.
+//
+// DRY_RUN_STEP0b = true  → logs what would be deleted, no actual deletes
+// DRY_RUN_STEP0b = false → performs the deletes
+// =============================================================================
+
+const DRY_RUN_STEP0b = true; // ← SET TO FALSE ONLY AFTER REVIEWING DRY RUN OUTPUT
+
+function runStep0b_DeleteDuplicatesOnly() {
+  const t0 = Date.now();
+  const props  = PropertiesService.getScriptProperties();
+  const token  = props.getProperty('CLICKUP_TOKEN');
+  const teamId = props.getProperty('CLICKUP_TEAM_ID');
+  if (!token || !teamId) { Logger.log('❌ CLICKUP_TOKEN or CLICKUP_TEAM_ID missing.'); return; }
+
+  if (!START_DATE_OVERRIDE.trim() || !END_DATE_OVERRIDE.trim()) {
+    Logger.log('❌ START_DATE_OVERRIDE and END_DATE_OVERRIDE must both be set.'); return;
+  }
+
+  const windowStartMs = new Date(START_DATE_OVERRIDE + 'T00:00:00Z').getTime();
+  const windowEndMs   = new Date(END_DATE_OVERRIDE   + 'T23:59:59Z').getTime();
+
+  Logger.log(`🔍 Duplicate-only cleanup: ${START_DATE_OVERRIDE} → ${END_DATE_OVERRIDE}`);
+  Logger.log(DRY_RUN_STEP0b ? '🔍 DRY RUN — nothing will be deleted' : '⚠️  LIVE — deletions are permanent');
+
+  const allEntries = fetchAllTimeEntriesTeamWide(teamId, token, windowStartMs, windowEndMs, t0);
+  Logger.log(`Total entries in window: ${allEntries.length}`);
+  if (allEntries.length === 0) { Logger.log('Nothing to process.'); return; }
+
+  // Group by task
+  const byTask = {};
+  for (const e of allEntries) {
+    const tid = e.task_id || 'no_task';
+    if (!byTask[tid]) byTask[tid] = { name: e.task_name || '(no task)', entries: [] };
+    byTask[tid].entries.push(e);
+  }
+
+  // Identify duplicates within each task group
+  const toDelete = [];
+  for (const [tid, { name, entries }] of Object.entries(byTask)) {
+    // Sort by entry ID ascending — lower ID = created first = keep it
+    const sorted = entries.slice().sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    const kept   = [];
+    for (const e of sorted) {
+      const isDup = kept.some(k => Math.min(e.end, k.end) - Math.max(e.start, k.start) > 5000);
+      if (isDup) {
+        toDelete.push({ entryId: e.id, taskId: tid, taskName: name, startMs: e.start, endMs: e.end });
+      } else {
+        kept.push(e);
+      }
+    }
+  }
+
+  Logger.log(`\n📊 ${toDelete.length} duplicates found across ${Object.keys(byTask).length} tasks`);
+  if (toDelete.length === 0) { Logger.log('✅ No duplicates — nothing to delete.'); return; }
+
+  toDelete.forEach(d =>
+    Logger.log(`  ${DRY_RUN_STEP0b ? '[DRY RUN]' : 'DELETE'} entry=${d.entryId} | ${d.taskName} | ${fmtTs(d.startMs)} → ${fmtTs(d.endMs)}`)
+  );
+
+  if (DRY_RUN_STEP0b) {
+    Logger.log(`\n✅ Dry run complete. Set DRY_RUN_STEP0b = false and re-run to delete.`);
+    return;
+  }
+
+  // Delete duplicates only
+  let deletedCount = 0, errorCount = 0;
+  for (const d of toDelete) {
+    if (Date.now() - t0 > MAX_RUNTIME_MS - TIME_BUFFER_MS) {
+      Logger.log(`⚠️ Runtime limit — deleted ${deletedCount}/${toDelete.length}. Re-run to finish.`); break;
+    }
+    try {
+      const res  = UrlFetchApp.fetch(`https://api.clickup.com/api/v2/team/${teamId}/time_entries/${d.entryId}`, {
+        method: 'delete', headers: { 'Authorization': token }, muteHttpExceptions: true,
+      });
+      const code = res.getResponseCode();
+      if (code === 200 || code === 204) { deletedCount++; Logger.log(`🗑️ Deleted ${d.entryId}`); }
+      else { errorCount++; Logger.log(`🚨 Failed ${d.entryId} (HTTP ${code})`); }
+    } catch(ex) { errorCount++; Logger.log(`❌ Error deleting ${d.entryId}: ${ex.message}`); }
+    Utilities.sleep(300);
+  }
+
+  Logger.log(`\n✅ Step 0b complete. Deleted: ${deletedCount}, Errors: ${errorCount}`);
+  Logger.log('   Original entries are untouched. No need to re-run Steps 1–3a.');
 }
 
 // =============================================================================
