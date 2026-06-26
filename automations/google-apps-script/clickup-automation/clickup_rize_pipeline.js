@@ -1435,7 +1435,6 @@ function runStep5b_InjectAdditionalMapping() {
 
 
 
-
 // =============================================================================
 // DIAGNOSTIC: Time Entry Audit
 //
@@ -1451,7 +1450,8 @@ function runStep5b_InjectAdditionalMapping() {
 // Re-running clears and rewrites the tab so it always shows the latest state.
 // =============================================================================
  
-const START_AUDIT_DATE      = '2026-01-01';
+const START_AUDIT_DATE      = '2026-01-01'; // audit window start — change per run
+const END_AUDIT_DATE        = '2026-01-31'; // audit window end   — change per run
 const OVERLAP_THRESHOLD_MS  = 2 * 60 * 1000;
 const TOO_LONG_THRESHOLD_MS = 4 * 60 * 60 * 1000;
  
@@ -1470,9 +1470,9 @@ function runDiagnostic_TimeEntryAudit() {
   if (!token || !teamId) { Logger.log('❌ CLICKUP_TOKEN or CLICKUP_TEAM_ID missing.'); return; }
  
   const startMs = new Date(START_AUDIT_DATE + 'T00:00:00Z').getTime();
-  const endMs   = Date.now() + 60 * 60 * 1000;
+  const endMs   = new Date(END_AUDIT_DATE   + 'T23:59:59Z').getTime();
  
-  Logger.log(`🔍 Time Entry Audit — ${START_AUDIT_DATE} → now`);
+  Logger.log(`🔍 Time Entry Audit — ${START_AUDIT_DATE} → ${END_AUDIT_DATE}`);
   Logger.log('Fetching all time entries...');
  
   const allEntries = fetchAllTimeEntriesTeamWide(teamId, token, startMs, endMs, t0);
