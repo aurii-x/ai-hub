@@ -1,5 +1,8 @@
 // =============================================================================
-// CLICKUP TIME ENTRY CLEANUP TOOL
+//
+/**  BLIND CLICKUP TIME ENTRY CLEANUP TOOL
+// use runStep0_DeleteTrackedTimeInWindow () or runStep0b_DeleteDuplicatesOnly(), but first run setDryRunStep0b_Live() or setDryRunStep0b_DryRun()
+*/
 // =============================================================================
 const CLEANUP_START_DATE = "2026-02-01T00:00:00Z"; // Set to when the duplicates started
 const CLEANUP_END_DATE   = "2026-02-28T23:59:59Z"; // Set to current time/end of cleanup window
