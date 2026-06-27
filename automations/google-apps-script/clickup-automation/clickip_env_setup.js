@@ -11,7 +11,7 @@ const LOOKBACK_HOURS                = 24;     // how far back to pull Rize entri
 const INCLUDE_CLOSED_CLICKUP_TASKS  = true;  // completed tasks need to match too (Coursera modules, finished applications, etc.)
 const OVERLAP_TOLERANCE_MS          = 5 * 60 * 1000; // 5 min — entries within this are "the same"
 const BATCH_SIZE                    = 50;     // ClickUp tasks processed per checkpoint
-const MAX_RUNTIME_MS                = 10 * 60 * 1000;
+//const MAX_RUNTIME_MS                = 10 * 60 * 1000;
 const SILENT_MODE                   = true;   // true = no UI alerts (required for hourly trigger)
 const SYNC_START_DATE               = '2026-06-01'; // fixed anchor — your historical correction start point
 const SYNC_END_DATE                 = '';           // blank = "today" (recalculated each run); set a fixed

@@ -2,7 +2,7 @@
 // GLOBAL USER ENVIRONMENT CONFIGURATION
 // =============================================================================
 const START_DATE_OVERRIDE = "2026-01-01"; 
-const END_DATE_OVERRIDE   = "2026-01-31"; 
+const END_DATE_OVERRIDE   = "2026-05-25"; 
 const CLEAN_TAB_NAME      = 'Rize_Clean_Sync';
 const TARGET_FOLDER_PATH  = ['AppData', '3.1 clickup-automation']; 
 const BASE_FILENAME       = 'ClickUp-Rize Sync';         
@@ -599,8 +599,6 @@ function fetchAllClickUpTasksInventory(teamId, token, includeClosed) {
 }
 
 function fetchLiveClickUpTimeEntriesArray(taskId, token, teamId) {
-  // Team ID is required — without it ClickUp returns an HTML error page
-  // which causes "Unexpected non-whitespace character at position 4"
   const url = `https://api.clickup.com/api/v2/team/${teamId}/time_entries?task_id=${taskId}`;
   try {
     const res     = UrlFetchApp.fetch(url, { method: 'get', headers: { 'Authorization': token }, muteHttpExceptions: true });
@@ -610,8 +608,19 @@ function fetchLiveClickUpTimeEntriesArray(taskId, token, teamId) {
       Logger.log(`⚠️ Task ${taskId} time entries — HTTP ${code}: ${rawText.substring(0, 200)}`);
       return [];
     }
-    const payload = JSON.parse(rawText);
-    if (!payload || !payload.data) return [];
+    // Guard against non-JSON responses (deleted/inaccessible tasks)
+    if (!rawText || rawText.trimStart().charAt(0) !== '{') {
+      Logger.log(`⚠️ Task ${taskId} returned non-JSON response — skipping. First 80 chars: ${rawText.substring(0, 80)}`);
+      return [];
+    }
+    let payload;
+    try {
+      payload = JSON.parse(rawText);
+    } catch(parseErr) {
+      Logger.log(`⚠️ Task ${taskId} JSON parse failed: ${parseErr.message}. First 80 chars: ${rawText.substring(0, 80)}`);
+      return [];
+    }
+    if (!payload || !Array.isArray(payload.data)) return [];
     return payload.data.map(e => ({
       id: e.id, start: Number(e.start), end: Number(e.end), duration: Number(e.duration)
     }));
@@ -809,8 +818,6 @@ function runStep0_DeleteTrackedTimeInWindow() {
 // DRY_RUN_STEP0b = false → performs the deletes
 // =============================================================================
 
-const DRY_RUN_STEP0b = true; // ← SET TO FALSE ONLY AFTER REVIEWING DRY RUN OUTPUT
-
 function runStep0b_DeleteDuplicatesOnly() {
   const t0 = Date.now();
   const props  = PropertiesService.getScriptProperties();
@@ -822,11 +829,14 @@ function runStep0b_DeleteDuplicatesOnly() {
     Logger.log('❌ START_DATE_OVERRIDE and END_DATE_OVERRIDE must both be set.'); return;
   }
 
+  // Toggle via setDryRunStep0b_Live() / setDryRunStep0b_DryRun() — no code edits needed
+  const dryRun = props.getProperty('DRY_RUN_STEP0b') !== 'false';
+
   const windowStartMs = new Date(START_DATE_OVERRIDE + 'T00:00:00Z').getTime();
   const windowEndMs   = new Date(END_DATE_OVERRIDE   + 'T23:59:59Z').getTime();
 
   Logger.log(`🔍 Duplicate-only cleanup: ${START_DATE_OVERRIDE} → ${END_DATE_OVERRIDE}`);
-  Logger.log(DRY_RUN_STEP0b ? '🔍 DRY RUN — nothing will be deleted' : '⚠️  LIVE — deletions are permanent');
+  Logger.log(dryRun ? '🔍 DRY RUN — nothing will be deleted' : '⚠️  LIVE — deletions are permanent');
 
   const allEntries = fetchAllTimeEntriesTeamWide(teamId, token, windowStartMs, windowEndMs, t0);
   Logger.log(`Total entries in window: ${allEntries.length}`);
@@ -860,11 +870,11 @@ function runStep0b_DeleteDuplicatesOnly() {
   if (toDelete.length === 0) { Logger.log('✅ No duplicates — nothing to delete.'); return; }
 
   toDelete.forEach(d =>
-    Logger.log(`  ${DRY_RUN_STEP0b ? '[DRY RUN]' : 'DELETE'} entry=${d.entryId} | ${d.taskName} | ${fmtTs(d.startMs)} → ${fmtTs(d.endMs)}`)
+    Logger.log(`  ${dryRun ? '[DRY RUN]' : 'DELETE'} entry=${d.entryId} | ${d.taskName} | ${fmtTs(d.startMs)} → ${fmtTs(d.endMs)}`)
   );
 
-  if (DRY_RUN_STEP0b) {
-    Logger.log(`\n✅ Dry run complete. Set DRY_RUN_STEP0b = false and re-run to delete.`);
+  if (dryRun) {
+    Logger.log(`\n✅ Dry run complete. Run setDryRunStep0b_Live() then re-run to delete.`);
     return;
   }
 
@@ -887,6 +897,18 @@ function runStep0b_DeleteDuplicatesOnly() {
 
   Logger.log(`\n✅ Step 0b complete. Deleted: ${deletedCount}, Errors: ${errorCount}`);
   Logger.log('   Original entries are untouched. No need to re-run Steps 1–3a.');
+}
+
+/** Run this to enable LIVE deletion mode for Step 0b, then run runStep0b_DeleteDuplicatesOnly() */
+function setDryRunStep0b_Live() {
+  PropertiesService.getScriptProperties().setProperty('DRY_RUN_STEP0b', 'false');
+  Logger.log('⚠️ Step 0b is now in LIVE mode — next run will DELETE duplicates permanently.');
+}
+
+/** Run this to revert Step 0b to safe dry-run mode */
+function setDryRunStep0b_DryRun() {
+  PropertiesService.getScriptProperties().setProperty('DRY_RUN_STEP0b', 'true');
+  Logger.log('✅ Step 0b is back in DRY RUN mode — safe to run without deleting anything.');
 }
 
 // =============================================================================

@@ -1,8 +1,8 @@
 // =============================================================================
 // CLICKUP TIME ENTRY CLEANUP TOOL
 // =============================================================================
-const CLEANUP_START_DATE = "2026-01-01T00:00:00Z"; // Set to when the duplicates started
-const CLEANUP_END_DATE   = "2026-01-31T23:59:59Z"; // Set to current time/end of cleanup window
+const CLEANUP_START_DATE = "2026-02-01T00:00:00Z"; // Set to when the duplicates started
+const CLEANUP_END_DATE   = "2026-02-28T23:59:59Z"; // Set to current time/end of cleanup window
 const DELETE_DELAY_MS    = 2000;                   // 2-second delay to avoid rate limits
 
 /**
