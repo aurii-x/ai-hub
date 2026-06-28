@@ -4,9 +4,9 @@
 // use runStep0_DeleteTrackedTimeInWindow () or runStep0b_DeleteDuplicatesOnly(), but first run setDryRunStep0b_Live() or setDryRunStep0b_DryRun()
 */
 // =============================================================================
-const CLEANUP_START_DATE = "2026-02-01T00:00:00Z"; // Set to when the duplicates started
-const CLEANUP_END_DATE   = "2026-02-28T23:59:59Z"; // Set to current time/end of cleanup window
-const DELETE_DELAY_MS    = 2000;                   // 2-second delay to avoid rate limits
+const CLEANUP_START_DATE = "2025-01-01T00:00:00Z"; // Set to when the duplicates started
+const CLEANUP_END_DATE   = "2026-06-27T23:59:59Z"; // Set to current time/end of cleanup window
+const DELETE_DELAY_MS    = 100;                   // 2-second delay to avoid rate limits
 
 /**
  * Fetches time entries within a window and deletes them.
