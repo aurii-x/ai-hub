@@ -1,7 +1,13 @@
 // =============================================================================
-// ClickUp Dashboard Export  v1.5
+// ClickUp Dashboard Export  v1.6
 //
 // CHANGELOG
+//   v1.6 - Fixed writeTaskRows upsert mode: incremental sync was overwriting
+//           tracked time columns (L-P) and date columns (C-D) with blanks when
+//           a task had no time entries in the recent 2-hour window. Now preserves
+//           existing cell values in those columns unless fresh data is available.
+//           Date columns (C-D) only updated when ClickUp returns a non-empty value.
+//
 //   v1.5 - Full regeneration consolidating all prior changes. Version number
 //           now correct in file header. No functional changes from v1.4.
 //
@@ -81,8 +87,8 @@ const HEADERS = [
  */
 function dbSetup() {
   PropertiesService.getScriptProperties().setProperties({
-    CLICKUP_TOKEN:   'pk_216003478_5N2AE9LICIRWR32210VR9PO1J2OKS4U7',
-    CLICKUP_TEAM_ID: '90141302224',
+    CLICKUP_TOKEN:   'pk_YOUR_PERSONAL_API_TOKEN_HERE',
+    CLICKUP_TEAM_ID: 'YOUR_TEAM_ID_HERE',
   });
   Logger.log('✅ Credentials saved. Clear the values from dbSetup() now.');
 }
@@ -524,18 +530,43 @@ function writeTaskRows(sheet, tasks, timeMap, upsert) {
   }
 
   const index = buildTaskIdIndex(sheet);
+
   for (const task of tasks) {
-    const row    = buildTaskRow(task, timeMap[task.id]);
+    const td     = timeMap[task.id] || null;
+    const row    = buildTaskRow(task, td);
     const rowNum = index[task.id];
+
     if (rowNum) {
-      sheet.getRange(rowNum, 1, 1, HEADERS.length).setValues([row]);
+      if (td) {
+        // Full row update — we have fresh time entry data
+        sheet.getRange(rowNum, 1, 1, HEADERS.length).setValues([row]);
+      } else {
+        // Partial update — preserve existing time entry cols (L–P = cols 12–16)
+        // and existing start/end date cols (C–D = cols 3–4) which may have been
+        // backfilled by the pipeline and aren't stored on the ClickUp task itself
+        const META_COLS = [1,2,5,6,7,8,9,10,11]; // A,B,E–K (task metadata)
+        const DATE_COLS = [3,4];                  // C,D (start/end date)
+        const TAIL_COLS = [17,18];                // Q,R (created, last modified)
+
+        // Always update metadata and tail columns
+        META_COLS.forEach(c => sheet.getRange(rowNum, c).setValue(row[c-1]));
+        TAIL_COLS.forEach(c => sheet.getRange(rowNum, c).setValue(row[c-1]));
+
+        // Only update date cols if ClickUp actually has a value — don't blank them
+        DATE_COLS.forEach(c => {
+          if (row[c-1] !== '') sheet.getRange(rowNum, c).setValue(row[c-1]);
+        });
+        // Cols L–P (12–16) are not touched — existing time entry data preserved
+      }
       stats.updated++;
     } else {
+      // New row — write everything
       const nextRow = sheet.getLastRow() + 1;
       sheet.getRange(nextRow, 1, 1, HEADERS.length).setValues([row]);
       index[task.id] = nextRow;
       stats.added++;
     }
+
     if ((stats.added + stats.updated) % 50 === 0) {
       SpreadsheetApp.flush();
       Logger.log(`  Upserted ${stats.added + stats.updated} rows so far...`);
