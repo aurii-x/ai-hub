@@ -1,14 +1,14 @@
 // =============================================================================
 // GLOBAL USER ENVIRONMENT CONFIGURATION
 // =============================================================================
-const START_DATE_OVERRIDE = "2026-01-01"; 
-const END_DATE_OVERRIDE   = "2026-05-25"; 
+const START_DATE_OVERRIDE = "2025-01-01"; 
+const END_DATE_OVERRIDE   = "2026-06-27"; 
 const CLEAN_TAB_NAME      = 'Rize_Clean_Sync';
 const TARGET_FOLDER_PATH  = ['AppData', '3.1 clickup-automation']; 
 const BASE_FILENAME       = 'ClickUp-Rize Sync';         
 const INCLUDE_CLOSED_TASKS = true;
-const TIME_BUFFER_MS      = 25000;
-const MAX_RUNTIME_MS      = 330000;
+//const TIME_BUFFER_MS      = 25000;
+//const MAX_RUNTIME_MS      = 660000;
 
 // =============================================================================
 // STEP 1: Extract Rize entries into staging — IDEMPOTENT VERSION
