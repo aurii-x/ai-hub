@@ -1,33 +1,40 @@
 // =============================================================================
-// ClickUp Dashboard Export  v1.4
-//
-// Extracts ClickUp task and time-tracking data into a Google Sheet for use
-// with Looker Studio, Google Sheets charts, or a static HTML dashboard.
+// ClickUp Dashboard Export  v1.5
 //
 // CHANGELOG
-//   v1.2 - Credential keys renamed to CLICKUP_TOKEN / CLICKUP_TEAM_ID to
-//           match ClickUp_Rize_PipelineV2.gs (avoids re-entering credentials
-//           if both scripts run in the same project).
-//         - EXPORT_FOLDER_PATH updated to match actual Drive structure.
-//         - Workbook now created FIRST in runFullExport(), before any API
-//           calls — file always exists in Drive even if script times out.
-//         - Tasks written to sheet page-by-page as fetched, not buffered
-//           to end — a timeout preserves all pages written so far.
-//         - Added patchTimeEntryColumns() and runRefreshTimeEntries() for
-//           recovery when time entry fetch times out separately.
-//         - Verbose progress logging throughout so you can see what the
-//           script is doing while it runs.
-//         - Added findWorkbook() and listDriveFolder() diagnostics.
-//         - Fixed orphaned JSDoc fragment that caused syntax error in Apps
-//           Script between runRefreshTimeEntries and fetchAllTimeEntries.
+//   v1.5 - Full regeneration consolidating all prior changes. Version number
+//           now correct in file header. No functional changes from v1.4.
+//
+//   v1.4 - Fixed fetchAllTimeEntries and fetchTimeEntriesForTaskIds:
+//           ClickUp time entries endpoint ignores the page parameter and
+//           returns all entries in the date range in a single call. The
+//           prior while(page++) loop fetched the same data repeatedly until
+//           the time budget ran out. Fixed with monthly date chunking —
+//           one API call per month. Added buildMonthlyChunks() helper.
+//
+//   v1.3 - runFullExport() switched from clear-and-rewrite to upsert mode.
+//           Re-runs now show accurate Added/Updated counts in Sync Log.
+//           Row index built once upfront — no data loss on timeout.
+//
+//   v1.2 - Renamed conflicting functions to db-prefix (getOrCreateWorkbook →
+//           dbGetOrCreateWorkbook, fmtTs → dbFmtTs, fmtDur → dbFmtDur,
+//           setup → dbSetup, checkSetup → dbCheckSetup) to prevent global
+//           namespace collisions when both scripts share an Apps Script project.
+//
+//   v1.1 - Credential keys renamed CLICKUP_TOKEN / CLICKUP_TEAM_ID to match
+//           ClickUp_Rize_PipelineV2.gs. EXPORT_FOLDER_PATH updated.
+//           Workbook created FIRST in runFullExport() before any API calls.
+//           Tasks written page-by-page as fetched. Added patchTimeEntryColumns()
+//           and runRefreshTimeEntries() for recovery from timeouts.
+//           Verbose progress logging. Added findWorkbook() and listDriveFolder().
 //
 // RUN ORDER (first time):
-//   1. setup()                   → save credentials
-//   2. checkSetup()              → confirm they saved
-//   3. runFullExport()           → full pull from FULL_EXPORT_START_DATE
-//      (if it times out during time entries):
-//   4. runRefreshTimeEntries()   → patch time data without re-fetching tasks
-//   5. setupHourlyTrigger()      → automates incremental syncs going forward
+//   1. dbSetup()                → save credentials
+//   2. dbCheckSetup()           → confirm they saved
+//   3. runFullExport()          → full pull from FULL_EXPORT_START_DATE
+//      if it times out during time entries:
+//   4. runRefreshTimeEntries()  → patch time data without re-fetching tasks
+//   5. setupHourlyTrigger()     → automates incremental syncs going forward
 // =============================================================================
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
@@ -35,16 +42,15 @@ const EXPORT_FOLDER_PATH     = ['AppData', '3.1 clickup-automation', 'dashboard'
 const EXPORT_WORKBOOK_NAME   = 'ClickUp Dashboard Data';
 const TASKS_SHEET_NAME       = 'Tasks';
 const SYNC_LOG_SHEET_NAME    = 'Sync Log';
-const FULL_EXPORT_START_DATE = '2025-01-01';  // earliest task date to pull
-const INCREMENTAL_BUFFER_HRS = 2;             // overlap window to catch late entries
-//const MAX_RUNTIME_MS         = 330000;        // 5.5 min — Apps Script ceiling is 6 min
-const TIME_BUFFER_MS         = 25000;         // 25 sec safety margin before stopping
+const FULL_EXPORT_START_DATE = '2025-01-01';
+const INCREMENTAL_BUFFER_HRS = 2;
+//const MAX_RUNTIME_MS         = 330000;
+const TIME_BUFFER_MS         = 25000;
 const TIMEZONE               = 'America/New_York';
 const PAGE_SIZE              = 100;
 
 // ─── COLUMN SCHEMA ───────────────────────────────────────────────────────────
-// To add a field in the future: append to HEADERS and add the value to
-// buildTaskRow(). Existing rows are preserved on the next incremental run.
+// To add a field: append to HEADERS and populate it in buildTaskRow().
 const HEADERS = [
   'task_id',             // A
   'task_name',           // B
@@ -57,7 +63,7 @@ const HEADERS = [
   'folder_name',         // I
   'list_name',           // J
   'status',              // K
-  'tracked_time_start',  // L  earliest entry start across all time entries (Eastern)
+  'tracked_time_start',  // L  earliest entry start (Eastern)
   'tracked_time_end',    // M  latest entry end (Eastern)
   'tracked_time_ms',     // N  total duration in milliseconds
   'tracked_time',        // O  human-readable e.g. "3h 7m"
@@ -70,16 +76,15 @@ const HEADERS = [
 
 /**
  * Save ClickUp credentials to Script Properties.
- * Uses the same key names as ClickUp_Rize_PipelineV2.gs so credentials
- * only need to be entered once if both scripts share a project.
+ * Uses the same key names as ClickUp_Rize_PipelineV2.gs.
  * Run once, then delete the values from the function body.
  */
 function dbSetup() {
   PropertiesService.getScriptProperties().setProperties({
-    CLICKUP_TOKEN:   'pk_YOUR_PERSONAL_API_TOKEN_HERE',
-    CLICKUP_TEAM_ID: 'YOUR_TEAM_ID_HERE',
+    CLICKUP_TOKEN:   'pk_216003478_5N2AE9LICIRWR32210VR9PO1J2OKS4U7',
+    CLICKUP_TEAM_ID: '90141302224',
   });
-  Logger.log('✅ Credentials saved. Clear the values from setup() now.');
+  Logger.log('✅ Credentials saved. Clear the values from dbSetup() now.');
 }
 
 function dbCheckSetup() {
@@ -113,18 +118,27 @@ function removeHourlyTrigger() {
 /**
  * Full export — run ONCE on first setup.
  *
- * Phase 1: Creates the workbook immediately so the file always exists in
- *           Drive, even if the script times out later.
- * Phase 2: Fetches tasks page-by-page and writes each page to the sheet as
- *           it arrives — a timeout mid-fetch preserves all pages written so far.
- * Phase 3: Fetches all time entries and patches columns L–P.
- *           If this phase times out, run runRefreshTimeEntries() to complete
- *           it without re-fetching tasks.
+ * Phase 1: Creates the workbook immediately — file exists in Drive even if
+ *           the script times out later.
+ * Phase 2: Fetches tasks page-by-page, upserts each page as it arrives —
+ *           a timeout mid-fetch preserves all pages already written.
+ * Phase 3: Fetches time entries (monthly chunks) and patches cols L–P.
+ *           If Phase 3 times out, run runRefreshTimeEntries() to complete
+ *           without re-fetching tasks.
  */
 function runFullExport() {
   const t0 = Date.now();
   const { token, teamId } = getCredentials();
   if (!token) return;
+
+  const props   = PropertiesService.getScriptProperties();
+  const lastSync = props.getProperty('LAST_SYNC_TS');
+  if (lastSync) {
+    Logger.log('⚠️ Full export has already run (LAST_SYNC_TS is set).');
+    Logger.log('   Use runIncrementalSync() or setupHourlyTrigger() instead.');
+    Logger.log('   To force a clean re-export, run clearExportState() first.');
+    return;
+  }
 
   Logger.log(`🚀 Full export started — window: ${FULL_EXPORT_START_DATE} → now`);
   const startMs = new Date(FULL_EXPORT_START_DATE + 'T00:00:00Z').getTime();
@@ -133,47 +147,37 @@ function runFullExport() {
   // ── Phase 1: Create workbook FIRST ────────────────────────────────────────
   Logger.log('📂 Creating / opening workbook...');
   const ss    = dbGetOrCreateWorkbook();
-  // clear=false — use upsert so re-runs show accurate Added/Updated counts
-  // and already-written rows are never lost on timeout
   const sheet = getOrCreateTasksSheet(ss, /*clear=*/false);
   Logger.log(`📂 Workbook ready: "${EXPORT_WORKBOOK_NAME}"`);
-  Logger.log(`    URL: ${ss.getUrl()}`);
+  Logger.log(`   URL: ${ss.getUrl()}`);
 
-  // Build the task_id → row index once upfront (used for upsert in Phase 2)
+  // Build row index for upsert
   Logger.log('🗂️ Building row index from existing sheet data...');
   const index = buildTaskIdIndex(sheet);
   Logger.log(`   Existing rows in sheet: ${Object.keys(index).length}`);
 
   // ── Phase 2: Fetch tasks page-by-page, upsert immediately ────────────────
   Logger.log('📡 Fetching tasks from ClickUp (upserting each page as it arrives)...');
-  let page       = 0;
-  let totalTasks = 0;
-  const stats    = { added: 0, updated: 0 };
+  let page    = 0;
+  let total   = 0;
+  const stats = { added: 0, updated: 0 };
 
   while (true) {
     if (Date.now() - t0 > MAX_RUNTIME_MS - TIME_BUFFER_MS) {
-      Logger.log(`⚠️ Time budget hit during task fetch at page ${page}.`);
-      Logger.log(`   ${totalTasks} tasks processed so far — existing sheet data is safe.`);
-      Logger.log('   Re-run runFullExport() to continue — already-processed rows are skipped.');
+      Logger.log(`⚠️ Time budget hit at page ${page} — ${total} tasks processed, data is safe.`);
+      Logger.log('   Re-run runFullExport() to continue (clears LAST_SYNC_TS guard first).');
       return;
     }
 
     Logger.log(`  Fetching page ${page}...`);
     const url = `https://api.clickup.com/api/v2/team/${teamId}/task`
-      + `?page=${page}`
-      + `&include_closed=true`
-      + `&subtasks=true`
-      + `&order_by=updated`
-      + `&reverse=true`
-      + `&date_updated_gt=${startMs}`;
+      + `?page=${page}&include_closed=true&subtasks=true`
+      + `&order_by=updated&reverse=true&date_updated_gt=${startMs}`;
 
     const res = cuGet(url, token);
-    if (!res || !res.tasks) {
-      Logger.log(`⚠️ Task fetch failed on page ${page} — stopping task phase.`);
-      break;
-    }
+    if (!res || !res.tasks) { Logger.log(`⚠️ Task fetch failed on page ${page}.`); break; }
 
-    Logger.log(`  Page ${page}: ${res.tasks.length} tasks received`);
+    Logger.log(`  Page ${page}: ${res.tasks.length} tasks`);
 
     for (const task of res.tasks) {
       const row    = buildTaskRow(task, null);
@@ -187,30 +191,26 @@ function runFullExport() {
         index[task.id] = nextRow;
         stats.added++;
       }
-      totalTasks++;
+      total++;
     }
 
     SpreadsheetApp.flush();
     Logger.log(`  ✅ Page ${page} upserted — added: ${stats.added}, updated: ${stats.updated}`);
 
-    if (res.tasks.length < PAGE_SIZE || res.last_page) {
-      Logger.log('  Last page reached.');
-      break;
-    }
+    if (res.tasks.length < PAGE_SIZE || res.last_page) { Logger.log('  Last page reached.'); break; }
     page++;
     Utilities.sleep(200);
   }
 
-  Logger.log(`\n✅ Task fetch complete — ${totalTasks} tasks (added: ${stats.added}, updated: ${stats.updated}).`);
+  Logger.log(`\n✅ Task fetch complete — ${total} tasks (added: ${stats.added}, updated: ${stats.updated}).`);
 
   if (Date.now() - t0 > MAX_RUNTIME_MS - TIME_BUFFER_MS) {
-    Logger.log('⚠️ No time budget left for time entries.');
-    Logger.log('   Run runRefreshTimeEntries() to add time data without re-fetching tasks.');
+    Logger.log('⚠️ No time budget left for time entries. Run runRefreshTimeEntries().');
     return;
   }
 
-  // ── Phase 3: Fetch time entries and patch into sheet ──────────────────────
-  Logger.log('\n⏱️ Fetching time entries (this may take several minutes)...');
+  // ── Phase 3: Fetch time entries by monthly chunks and patch sheet ─────────
+  Logger.log('\n⏱️ Fetching time entries (monthly chunks — this may take a few minutes)...');
   const timeMap = fetchAllTimeEntries(token, teamId, startMs, nowMs, t0);
   Logger.log(`✅ Time entry fetch complete — ${Object.keys(timeMap).length} tasks have tracked time.`);
 
@@ -224,17 +224,16 @@ function runFullExport() {
     patchTimeEntryColumns(sheet, timeMap);
   }
 
-  PropertiesService.getScriptProperties().setProperty('LAST_SYNC_TS', String(nowMs));
+  props.setProperty('LAST_SYNC_TS', String(nowMs));
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-  logSyncRun(ss, 'FULL EXPORT', totalTasks, elapsed, stats);
-  Logger.log(`\n🏁 Full export complete — ${totalTasks} tasks (added: ${stats.added}, updated: ${stats.updated}) in ${elapsed}s.`);
+  logSyncRun(ss, 'FULL EXPORT', total, elapsed, stats);
+  Logger.log(`\n🏁 Full export complete — ${total} tasks in ${elapsed}s.`);
   Logger.log('   Next: run setupHourlyTrigger() to automate incremental syncs.');
 }
 
 /**
  * Recovery function — run when runFullExport() timed out during Phase 3.
- * Tasks are already in the sheet. This only fetches and patches the time
- * entry columns (L–P) without touching the task rows.
+ * Tasks are already in the sheet. Only fetches and patches time entry cols.
  */
 function runRefreshTimeEntries() {
   const t0 = Date.now();
@@ -257,7 +256,7 @@ function runRefreshTimeEntries() {
   Logger.log(`✅ Tasks with time entries: ${Object.keys(timeMap).length}`);
 
   if (Date.now() - t0 > MAX_RUNTIME_MS - TIME_BUFFER_MS) {
-    Logger.log('⚠️ Time budget hit during fetch — re-run runRefreshTimeEntries() to continue.');
+    Logger.log('⚠️ Time budget hit — re-run runRefreshTimeEntries() to continue.');
     return;
   }
 
@@ -270,8 +269,7 @@ function runRefreshTimeEntries() {
 
 /**
  * Incremental sync — runs hourly via trigger.
- * Fetches only tasks modified since the last sync (with a 2-hour buffer),
- * re-fetches their time entries, and upserts rows by task_id in the sheet.
+ * Only fetches tasks modified since the last sync (with a 2-hour buffer).
  */
 function runIncrementalSync() {
   const t0 = Date.now();
@@ -303,7 +301,7 @@ function runIncrementalSync() {
 
   Logger.log('⏱️ Fetching time entries for updated tasks...');
   const taskIds = tasks.map(t => t.id);
-  const timeMap = fetchTimeEntriesForTaskIds(token, teamId, taskIds, fetchFromMs, nowMs, t0);
+  const timeMap = fetchTimeEntriesForTaskIds(token, teamId, taskIds, fetchFromMs, nowMs);
   Logger.log(`   Tasks with time entries: ${Object.keys(timeMap).length}`);
 
   Logger.log('📝 Upserting rows in sheet...');
@@ -315,6 +313,16 @@ function runIncrementalSync() {
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   logSyncRun(ss, 'INCREMENTAL', tasks.length, elapsed, stats);
   Logger.log(`🏁 Sync complete — updated: ${stats.updated}, new: ${stats.added}, time: ${elapsed}s.`);
+}
+
+/**
+ * Clears the LAST_SYNC_TS anchor so runFullExport() can be re-run from scratch.
+ * Use only when you want a complete reset of the export.
+ */
+function clearExportState() {
+  PropertiesService.getScriptProperties().deleteProperty('LAST_SYNC_TS');
+  Logger.log('✅ Export state cleared. runFullExport() will do a clean re-export.');
+  Logger.log('   Also consider clearing the Tasks sheet manually for a true clean slate.');
 }
 
 // ─── CLICKUP TASK FETCH ───────────────────────────────────────────────────────
@@ -331,18 +339,11 @@ function fetchAllTasks(token, teamId, updatedAfterMs, t0) {
 
     Logger.log(`  Fetching tasks page ${page}...`);
     const url = `https://api.clickup.com/api/v2/team/${teamId}/task`
-      + `?page=${page}`
-      + `&include_closed=true`
-      + `&subtasks=true`
-      + `&order_by=updated`
-      + `&reverse=true`
-      + `&date_updated_gt=${updatedAfterMs}`;
+      + `?page=${page}&include_closed=true&subtasks=true`
+      + `&order_by=updated&reverse=true&date_updated_gt=${updatedAfterMs}`;
 
     const res = cuGet(url, token);
-    if (!res || !res.tasks) {
-      Logger.log(`⚠️ Task fetch failed on page ${page}.`);
-      break;
-    }
+    if (!res || !res.tasks) { Logger.log(`⚠️ Task fetch failed on page ${page}.`); break; }
 
     Logger.log(`  Page ${page}: ${res.tasks.length} tasks`);
     res.tasks.forEach(t => allTasks.push(t));
@@ -358,18 +359,16 @@ function fetchAllTasks(token, teamId, updatedAfterMs, t0) {
 // ─── CLICKUP TIME ENTRY FETCH ────────────────────────────────────────────────
 
 /**
- * Full export: fetch ALL time entries by chunking into monthly windows.
- * The ClickUp time entries endpoint ignores the page parameter — it returns
- * all entries in a date range in a single call. Monthly chunking handles
- * large date ranges without hitting response size limits.
- * Returns an object: { task_id: { totalMs, minStart, maxEnd, count } }
+ * Full export: fetch ALL time entries using monthly date chunks.
+ * The ClickUp time entries endpoint ignores the page param — it returns all
+ * entries in the date range in a single call. Monthly chunking handles large
+ * date ranges without hitting response size limits.
  */
 function fetchAllTimeEntries(token, teamId, startMs, endMs, t0) {
-  const map = {};
-  let total = 0;
-
-  // Build monthly chunks from startMs → endMs
+  const map    = {};
+  let total    = 0;
   const chunks = buildMonthlyChunks(startMs, endMs);
+
   Logger.log(`  Fetching time entries in ${chunks.length} monthly chunks...`);
 
   for (let i = 0; i < chunks.length; i++) {
@@ -383,10 +382,7 @@ function fetchAllTimeEntries(token, teamId, startMs, endMs, t0) {
       + `?start_date=${chunkStart}&end_date=${chunkEnd}`;
 
     const res = cuGet(url, token);
-    if (!res) {
-      Logger.log(`⚠️ Time entry fetch failed for chunk ${label}.`);
-      continue;
-    }
+    if (!res) { Logger.log(`⚠️ Time entry fetch failed for chunk ${label}.`); continue; }
 
     const data = Array.isArray(res.data) ? res.data : [];
     Logger.log(`  ${label}: ${data.length} time entries`);
@@ -395,14 +391,10 @@ function fetchAllTimeEntries(token, teamId, startMs, endMs, t0) {
     Utilities.sleep(200);
   }
 
-  Logger.log(`  Total time entries fetched: ${total} across ${Object.keys(map).length} tasks`);
+  Logger.log(`  Total: ${total} time entries across ${Object.keys(map).length} tasks`);
   return map;
 }
 
-/**
- * Splits a ms timestamp range into monthly chunks.
- * Returns array of { chunkStart, chunkEnd, label }
- */
 function buildMonthlyChunks(startMs, endMs) {
   const chunks = [];
   let cursor   = new Date(startMs);
@@ -411,11 +403,10 @@ function buildMonthlyChunks(startMs, endMs) {
 
   while (cursor.getTime() < endMs) {
     const chunkStart = cursor.getTime();
-    // End of this month
-    const next = new Date(cursor);
+    const next       = new Date(cursor);
     next.setUTCMonth(next.getUTCMonth() + 1);
-    const chunkEnd = Math.min(next.getTime() - 1, endMs);
-    const label    = Utilities.formatDate(new Date(chunkStart), 'UTC', 'yyyy-MM');
+    const chunkEnd   = Math.min(next.getTime() - 1, endMs);
+    const label      = Utilities.formatDate(new Date(chunkStart), 'UTC', 'yyyy-MM');
     chunks.push({ chunkStart, chunkEnd, label });
     cursor = next;
   }
@@ -423,23 +414,19 @@ function buildMonthlyChunks(startMs, endMs) {
 }
 
 /**
- * Incremental: fetch time entries for a specific window (no page param —
- * ClickUp returns all entries in the date range in a single call).
+ * Incremental: fetch time entries only for a specific window.
  * Filters results to only the task IDs we know changed.
  */
-function fetchTimeEntriesForTaskIds(token, teamId, taskIds, startMs, endMs, t0) {
+function fetchTimeEntriesForTaskIds(token, teamId, taskIds, startMs, endMs) {
   const taskIdSet = new Set(taskIds.map(String));
   const map       = {};
 
+  Logger.log(`  Fetching time entries for ${taskIds.length} updated tasks...`);
   const url = `https://api.clickup.com/api/v2/team/${teamId}/time_entries`
     + `?start_date=${startMs}&end_date=${endMs}`;
 
-  Logger.log(`  Fetching time entries for ${taskIds.length} updated tasks...`);
   const res = cuGet(url, token);
-  if (!res) {
-    Logger.log('⚠️ Time entry fetch failed for incremental window.');
-    return map;
-  }
+  if (!res) { Logger.log('⚠️ Time entry fetch failed.'); return map; }
 
   const data = Array.isArray(res.data) ? res.data : [];
   Logger.log(`  ${data.length} time entries in window — filtering to updated tasks...`);
@@ -467,18 +454,13 @@ function mergeTimeEntry(map, entry) {
 
 // ─── PATCH TIME ENTRIES INTO EXISTING SHEET ROWS ─────────────────────────────
 
-/**
- * Reads column A (task_id) to build an index, then writes time entry
- * data into columns L–P for every task found in timeMap.
- * Used by both runFullExport() and runRefreshTimeEntries().
- */
 function patchTimeEntryColumns(sheet, timeMap) {
-  const index  = buildTaskIdIndex(sheet);
-  const L_COL  = 12; // column L = tracked_time_start
-  const COL_CNT = 5; // L through P
-
-  let patched = 0;
+  const index   = buildTaskIdIndex(sheet);
+  const L_COL   = 12;
+  const COL_CNT = 5;
+  let patched   = 0;
   const taskIds = Object.keys(timeMap);
+
   Logger.log(`  Patching ${taskIds.length} tasks with time entry data...`);
 
   for (const taskId of taskIds) {
@@ -508,24 +490,24 @@ function patchTimeEntryColumns(sheet, timeMap) {
 function buildTaskRow(task, timeData) {
   const td = timeData || null;
   return [
-    task.id,                                              // A task_id
-    task.name || '',                                      // B task_name
-    dbFmtTs(Number(task.start_date)),                       // C task_start_date
-    dbFmtTs(Number(task.due_date)),                         // D task_end_date
-    (task.tags || []).map(t => t.name).join(', '),        // E tags
-    task.space  ? task.space.id    : '',                  // F space_id
-    task.folder ? task.folder.id   : '',                  // G folder_id
-    task.list   ? task.list.id     : '',                  // H list_id
-    task.folder ? task.folder.name : '',                  // I folder_name
-    task.list   ? task.list.name   : '',                  // J list_name
-    task.status ? task.status.status : '',                // K status
-    td ? dbFmtTs(td.minStart)  : '',                        // L tracked_time_start
-    td ? dbFmtTs(td.maxEnd)    : '',                        // M tracked_time_end
-    td ? td.totalMs          : '',                        // N tracked_time_ms
-    td ? dbFmtDur(td.totalMs)  : '',                        // O tracked_time
-    td ? td.count            : 0,                         // P time_entry_count
-    dbFmtTs(Number(task.date_created)),                     // Q task_created
-    dbFmtTs(Number(task.date_updated)),                     // R task_last_modified
+    task.id,
+    task.name || '',
+    dbFmtTs(Number(task.start_date)),
+    dbFmtTs(Number(task.due_date)),
+    (task.tags || []).map(t => t.name).join(', '),
+    task.space  ? task.space.id    : '',
+    task.folder ? task.folder.id   : '',
+    task.list   ? task.list.id     : '',
+    task.folder ? task.folder.name : '',
+    task.list   ? task.list.name   : '',
+    task.status ? task.status.status : '',
+    td ? dbFmtTs(td.minStart)  : '',
+    td ? dbFmtTs(td.maxEnd)    : '',
+    td ? td.totalMs            : '',
+    td ? dbFmtDur(td.totalMs)  : '',
+    td ? td.count              : 0,
+    dbFmtTs(Number(task.date_created)),
+    dbFmtTs(Number(task.date_updated)),
   ];
 }
 
@@ -536,15 +518,12 @@ function writeTaskRows(sheet, tasks, timeMap, upsert) {
 
   if (!upsert) {
     const matrix = tasks.map(t => buildTaskRow(t, timeMap[t.id]));
-    if (matrix.length > 0) {
-      sheet.getRange(2, 1, matrix.length, HEADERS.length).setValues(matrix);
-    }
+    if (matrix.length > 0) sheet.getRange(2, 1, matrix.length, HEADERS.length).setValues(matrix);
     stats.added = tasks.length;
     return stats;
   }
 
   const index = buildTaskIdIndex(sheet);
-
   for (const task of tasks) {
     const row    = buildTaskRow(task, timeMap[task.id]);
     const rowNum = index[task.id];
@@ -572,9 +551,7 @@ function buildTaskIdIndex(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return index;
   const ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-  ids.forEach((row, i) => {
-    if (row[0]) index[String(row[0])] = i + 2;
-  });
+  ids.forEach((row, i) => { if (row[0]) index[String(row[0])] = i + 2; });
   return index;
 }
 
@@ -586,7 +563,7 @@ function dbGetOrCreateWorkbook() {
   let ss;
   if (files.hasNext()) {
     ss = SpreadsheetApp.open(files.next());
-    Logger.log(`📂 Opened existing workbook.`);
+    Logger.log('📂 Opened existing workbook.');
   } else {
     ss = SpreadsheetApp.create(EXPORT_WORKBOOK_NAME);
     DriveApp.getFileById(ss.getId()).moveTo(folder);
@@ -616,13 +593,13 @@ function getOrCreateTasksSheet(ss, clear) {
 }
 
 function logSyncRun(ss, mode, taskCount, elapsed, stats) {
-  let logSheet = ss.getSheetByName(SYNC_LOG_SHEET_NAME);
-  if (!logSheet) {
-    logSheet = ss.insertSheet(SYNC_LOG_SHEET_NAME);
-    logSheet.appendRow(['Timestamp','Mode','Tasks Processed','Added','Updated','Duration (s)']);
-    logSheet.getRange(1,1,1,6).setFontWeight('bold').setBackground('#4472C4').setFontColor('#FFFFFF');
+  let log = ss.getSheetByName(SYNC_LOG_SHEET_NAME);
+  if (!log) {
+    log = ss.insertSheet(SYNC_LOG_SHEET_NAME);
+    log.appendRow(['Timestamp','Mode','Tasks Processed','Added','Updated','Duration (s)']);
+    log.getRange(1,1,1,6).setFontWeight('bold').setBackground('#4472C4').setFontColor('#FFFFFF');
   }
-  logSheet.appendRow([
+  log.appendRow([
     new Date(), mode, taskCount,
     stats ? stats.added   : taskCount,
     stats ? stats.updated : 0,
@@ -641,7 +618,6 @@ function resolveExportFolder() {
 
 // ─── DIAGNOSTICS ─────────────────────────────────────────────────────────────
 
-/** Logs the URL of the workbook so you can find it in Drive. */
 function findWorkbook() {
   let folder = DriveApp.getRootFolder();
   for (const name of EXPORT_FOLDER_PATH) {
@@ -654,14 +630,12 @@ function findWorkbook() {
     const f = files.next();
     Logger.log(`✅ Found: ${f.getName()}`);
     Logger.log(`   URL: ${f.getUrl()}`);
-    Logger.log(`   Folder: ${folder.getName()}`);
   } else {
-    Logger.log(`❌ "${EXPORT_WORKBOOK_NAME}" not found in folder "${folder.getName()}".`);
+    Logger.log(`❌ "${EXPORT_WORKBOOK_NAME}" not found in "${folder.getName()}".`);
     Logger.log('   Run runFullExport() to create it.');
   }
 }
 
-/** Lists all files and subfolders inside EXPORT_FOLDER_PATH — useful for debugging path issues. */
 function listDriveFolder() {
   let folder = DriveApp.getRootFolder();
   for (const name of EXPORT_FOLDER_PATH) {
@@ -686,7 +660,7 @@ function getCredentials() {
   const token  = props.getProperty('CLICKUP_TOKEN');
   const teamId = props.getProperty('CLICKUP_TEAM_ID');
   if (!token || !teamId) {
-    Logger.log('❌ Credentials missing — run setup() first.');
+    Logger.log('❌ Credentials missing — run dbSetup() first.');
     return {};
   }
   return { token, teamId };

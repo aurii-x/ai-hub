@@ -177,12 +177,29 @@ function runStep2_CleanAndTransformStaging() {
   cleanSheet.appendRow(schemaHeaders);
   cleanSheet.appendRow(schemaTypes);
 
-  const finalMatrix = masterRecordsList.map(r => [
+ /* const finalMatrix = masterRecordsList.map(r => [
     r.start, r.end, r.duration, r.description, r.rizeId, r.rizeTaskId, r.taskName,
     ...(r.extraCols || [])
   ]);
   cleanSheet.getRange(3, 1, finalMatrix.length, finalMatrix[0].length).setValues(finalMatrix);
+*/
+// AFTER — normalize all rows to the same width before writing
+const finalMatrix = masterRecordsList.map(r => [
+    r.start, r.end, r.duration, r.description, r.rizeId, r.rizeTaskId, r.taskName,
+    ...(r.extraCols || [])
+]);
 
+// Find the widest row (existing rows with diagnostic cols will be wider than new rows)
+const maxCols = Math.max(...finalMatrix.map(row => row.length));
+
+// Pad every row to the same width with empty strings so setValues() doesn't crash
+const normalizedMatrix = finalMatrix.map(row => {
+    while (row.length < maxCols) row.push('');
+    return row;
+});
+
+cleanSheet.getRange(3, 1, normalizedMatrix.length, maxCols).setValues(normalizedMatrix);
+//==========================================================================================
   // Reapply headers styling for the base 7 columns
   cleanSheet.getRange(1, 1, 1, schemaHeaders.length).setFontWeight('bold').setBackground('#2F5597').setFontColor('#FFFFFF');
   cleanSheet.getRange(2, 1, 1, schemaHeaders.length).setFontStyle('italic').setBackground('#D9E1F2');

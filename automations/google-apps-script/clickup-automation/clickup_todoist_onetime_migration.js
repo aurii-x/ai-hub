@@ -11,31 +11,6 @@
 // ============================================================
 
 
-// ---- LIST ID MAP (created in ClickUp) ----
-const LIST_IDS = {
-  'career_deep_work':       '901417224062',
-  'career_job_search':      '901417224063',
-  'career_communication':   '901417224064',
-  'learning_courses':       '901417224065',
-  'learning_research':      '901417224067',
-  'personal_health':        '901417224069',
-  'personal_family':        '901417224070',
-  'personal_finance_legal': '901417224072',
-  'personal_rest':          '901417224073',
-  'device_tinkering':       '901417224075',
-  'device_focus':           '901417224080',
-  'web_productive':         '901417224082',
-  'web_news':               '901417224083',
-  'web_social':             '901417224086',
-  'straventis_client':      '901417224087',
-  'straventis_coding':      '901417224091',
-  'mindless_vortex':        '901417224093',
-  'mindless_drift':         '901417224094',
-  'inbox_today':            '901417224095',
-  'inbox_tomorrow':         '901417224099',
-  'inbox_wip':              '901417224102',
-};
-
 // ---- HELPER: parse duration string to minutes ----
 function parseDurationToMinutes(dur) {
   if (!dur) return null;
