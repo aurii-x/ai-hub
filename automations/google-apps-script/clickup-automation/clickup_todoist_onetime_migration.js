@@ -33,6 +33,7 @@ function getToken() {
   var t = PropertiesService.getScriptProperties().getProperty('CU_TOKEN');
   if (!t || t === 'YOUR_CLICKUP_API_TOKEN_HERE') throw new Error('Run setup() first with your ClickUp API token.');
   return t;
+  Logger.log('❌ Missing Todoist Token')
 }
 
 // ---- CLICKUP API CALLS ----
