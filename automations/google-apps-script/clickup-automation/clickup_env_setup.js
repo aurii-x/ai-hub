@@ -11,7 +11,7 @@ const LOOKBACK_HOURS                = 24;     // how far back to pull Rize entri
 const INCLUDE_CLOSED_CLICKUP_TASKS  = true;  // completed tasks need to match too (Coursera modules, finished applications, etc.)
 const OVERLAP_TOLERANCE_MS          = 5 * 60 * 1000; // 5 min — entries within this are "the same"
 const BATCH_SIZE                    = 50;     // ClickUp tasks processed per checkpoint
-//const MAX_RUNTIME_MS                = 10 * 60 * 1000;
+const MAX_RUNTIME_MS                = 10 * 60 * 1000;
 const SILENT_MODE                   = true;   // true = no UI alerts (required for hourly trigger)
 const SYNC_START_DATE               = '2026-06-01'; // fixed anchor — your historical correction start point
 const SYNC_END_DATE                 = '';           // blank = "today" (recalculated each run); set a fixed
@@ -21,6 +21,31 @@ SYNC_DELAY_SECONDS                  = 3;
 S3B_TIME_BUFFER_MS                  = 30000;
 const CUSTOM_FIELD_ID_RIZE_TIME_ENTRY = '87470de1-ad58-4886-a440-55a1936667f5'; // ← paste field ID from discoverCustomFieldIds()
 const CUSTOM_FIELD_ID_RIZE_TASK       = '6c8b4acf-36a1-444e-aa9d-daeb23601309'; // ← paste field ID from discoverCustomFieldIds()
+
+// ---- LIST ID MAP (created in ClickUp) ----
+const LIST_IDS = {
+  'career_deep_work':       '901417224062',
+  'career_job_search':      '901417224063',
+  'career_communication':   '901417224064',
+  'learning_courses':       '901417224065',
+  'learning_research':      '901417224067',
+  'personal_health':        '901417224069',
+  'personal_family':        '901417224070',
+  'personal_finance_legal': '901417224072',
+  'personal_rest':          '901417224073',
+  'device_tinkering':       '901417224075',
+  'device_focus':           '901417224080',
+  'web_productive':         '901417224082',
+  'web_news':               '901417224083',
+  'web_social':             '901417224086',
+  'straventis_client':      '901417224087',
+  'straventis_coding':      '901417224091',
+  'mindless_vortex':        '901417224093',
+  'mindless_drift':         '901417224094',
+  'inbox_today':            '901417224095',
+  'inbox_tomorrow':         '901417224099',
+  'inbox_wip':              '901417224102',
+};
 
 // ─── SETUP ───────────────────────────────────────────────────────────────────
 function setup() {
