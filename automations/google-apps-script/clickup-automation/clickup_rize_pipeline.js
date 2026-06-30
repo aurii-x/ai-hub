@@ -1,8 +1,8 @@
 // =============================================================================
 // GLOBAL USER ENVIRONMENT CONFIGURATION
 // =============================================================================
-const START_DATE_OVERRIDE = "2026-01-01"; 
-const END_DATE_OVERRIDE   = "2026-06-29"; 
+const START_DATE_OVERRIDE = "2025-01-01"; 
+const END_DATE_OVERRIDE   = "2025-06-30"; 
 const CLEAN_TAB_NAME      = 'Rize_Clean_Sync';
 const TARGET_FOLDER_PATH  = ['AppData', '3.1 clickup-automation']; 
 const BASE_FILENAME       = 'ClickUp-Rize Sync';         
