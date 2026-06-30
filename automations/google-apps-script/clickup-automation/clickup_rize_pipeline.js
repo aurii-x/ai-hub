@@ -1,8 +1,8 @@
 // =============================================================================
 // GLOBAL USER ENVIRONMENT CONFIGURATION
 // =============================================================================
-const START_DATE_OVERRIDE = "2025-01-01"; 
-const END_DATE_OVERRIDE   = "2026-06-27"; 
+const START_DATE_OVERRIDE = "2026-01-01"; 
+const END_DATE_OVERRIDE   = "2026-06-29"; 
 const CLEAN_TAB_NAME      = 'Rize_Clean_Sync';
 const TARGET_FOLDER_PATH  = ['AppData', '3.1 clickup-automation']; 
 const BASE_FILENAME       = 'ClickUp-Rize Sync';         
@@ -1862,4 +1862,20 @@ function fmtDur(ms) {
   if (!ms || isNaN(ms)) return '?';
   const totalMin = Math.floor(Math.abs(ms) / 60000);
   return `${Math.floor(totalMin / 60)}h ${totalMin % 60}m`;
+}
+
+/**
+ * Resets pipeline sync state so the next run starts completely fresh.
+ * Does NOT touch ClickUp or delete any data — only clears the Script
+ * Properties that track pipeline position/anchors.
+ */
+function resetSync() {
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty('RIZE_SYNC_START_IDX');
+  props.deleteProperty('INCREMENTAL_LAST_END');
+  props.deleteProperty('INCREMENTAL_MODE');
+  Logger.log('✅ Sync state cleared.');
+  Logger.log('   RIZE_SYNC_START_IDX, INCREMENTAL_LAST_END, INCREMENTAL_MODE removed.');
+  Logger.log('   Next runFullPipeline() or manual Step 1 will start fresh from your date override.');
+  Logger.log('   ClickUp data is untouched — Step 3a/3b live checks still prevent duplicates.');
 }
