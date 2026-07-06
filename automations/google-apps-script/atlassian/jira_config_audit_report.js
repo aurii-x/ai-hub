@@ -313,7 +313,7 @@ function reportWorkItemAttributes_(sheet) {
     statuses.values
       .filter(function (s) { return s.scope && s.scope.type === 'GLOBAL'; })
       .forEach(function (s) {
-        row_(sheet, ['Status (global)', s.name, s.statusCategory, OUR_STATUSES.indexOf(s.name) !== -1 ? '✅ Ours' : 'Default/other', '']);
+        row_(sheet, ['Status (global)', s.name, s.statusCategory, OUR_STATUSES.indexOf(s.name) !== -1 ? '✅ Site-specific' : 'Default/other', '']);
       });
   }
 
