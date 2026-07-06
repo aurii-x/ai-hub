@@ -130,13 +130,34 @@ function discoverClickUpSchema() {
   const sheet = getOrCreateTab_(getProp_('CLICKUP_SCHEMA_TAB', 'ClickUp Schema'));
   clearAndHeader_(sheet, ['Space', 'Folder', 'List', 'List ID', 'Field Name', 'Field Type', 'Field ID', 'Options / Config']);
 
+  // Standard (built-in) fields every ClickUp task has, regardless of List —
+  // written once at the top since these don't vary by Space/Folder/List.
+  const STANDARD_FIELDS = [
+    ['Task Name', 'text', 'name'],
+    ['Description', 'text (rich)', 'description'],
+    ['Status', 'status', 'status'],
+    ['Assignee(s)', 'user(s)', 'assignees'],
+    ['Priority', 'priority (urgent/high/normal/low)', 'priority'],
+    ['Due Date', 'date', 'due_date'],
+    ['Start Date', 'date', 'start_date'],
+    ['Time Estimate', 'duration (ms)', 'time_estimate'],
+    ['Time Tracked', 'duration (ms)', 'time_spent'],
+    ['Tags', 'label(s)', 'tags'],
+    ['Parent Task', 'relationship', 'parent'],
+    ['Task ID', 'text', 'id'],
+    ['Task URL', 'url', 'url'],
+  ];
+  STANDARD_FIELDS.forEach(function (f) {
+    sheet.appendRow(['(all)', '(all)', '(all)', '(standard)', f[0], f[1], f[2], '']);
+  });
+
   const spacesRes = clickUpRequest_('/team/' + teamId + '/space?archived=false');
   if (!spacesRes || !spacesRes.spaces) {
     logRun_('discoverClickUpSchema', 'Failed', 'Could not fetch spaces — check CLICKUP_TEAM_ID / token');
     return;
   }
 
-  let rowCount = 0;
+  let rowCount = STANDARD_FIELDS.length;
   spacesRes.spaces.forEach(function (space) {
     // Folderless lists directly in the space
     const folderlessLists = clickUpRequest_('/space/' + space.id + '/list?archived=false');
@@ -179,7 +200,7 @@ function writeListFields_(sheet, spaceName, folderName, list) {
 function discoverJiraSchema() {
   logRun_('discoverJiraSchema', 'Info', 'Starting Jira discovery');
   const sheet = getOrCreateTab_(getProp_('JIRA_SCHEMA_TAB', 'Jira Schema'));
-  clearAndHeader_(sheet, ['Project', 'Issue Type', 'Field ID', 'Field Name', 'Field Type', 'Required']);
+  clearAndHeader_(sheet, ['Project', 'Issue Type', 'Field ID', 'Field Name', 'Field Type', 'Custom?', 'Required']);
 
   const projectsRes = jiraRequest_('GET', '/rest/api/3/project/search?maxResults=100');
   if (!projectsRes || !projectsRes.values) {
@@ -192,10 +213,15 @@ function discoverJiraSchema() {
     const statusesRes = jiraRequest_('GET', '/rest/api/3/project/' + project.key + '/statuses');
     const issueTypes = statusesRes || [];
     issueTypes.forEach(function (issueType) {
+      // createmeta returns BOTH standard fields (summary, description, labels,
+      // components, priority, timetracking, parent, etc.) AND custom fields
+      // that are on this issue type's create screen — nothing extra needed
+      // to surface standard fields, they're already in this response.
       const meta = jiraRequest_('GET', '/rest/api/3/issue/createmeta/' + project.key + '/issuetypes/' + issueType.id);
       const fields = meta && meta.fields ? meta.fields : [];
       fields.forEach(function (f) {
-        sheet.appendRow([project.key, issueType.name, f.fieldId, f.name, (f.schema ? f.schema.type : ''), f.required]);
+        const isCustom = f.schema && f.schema.custom ? true : false;
+        sheet.appendRow([project.key, issueType.name, f.fieldId, f.name, (f.schema ? f.schema.type : ''), isCustom, f.required]);
         rowCount++;
       });
     });
