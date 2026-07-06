@@ -4,6 +4,12 @@
  * Version 2.0  |  July 2026
  *
  * CHANGELOG
+ * v2.4 - Removed Start Date/Time and End Date/Time custom fields —
+ *        replaced with native "duedate" (true system field) and
+ *        "Start date" (locked, auto-provisioned field, resolved by
+ *        name at runtime). Added deleteRedundantCustomFields() as
+ *        Phase 0, run first in runFullJiraSetup(), to clean up any
+ *        already-created copies from earlier runs.
  * v2.3 - Fixed workflow transitions missing required 'id' field.
  *        Renamed Learning Space key LEARN → LRN to avoid a key
  *        conflict with a leftover trashed project from the original
@@ -51,19 +57,19 @@
 
 const SPACE_CONFIG = [
   {
-    key: 'CARE', name: '1.x Career Development',
+    key: 'CARE', name: 'Career Development',
     components: ['1.1 Deep Work', '1.2 Job Search', '1.3 Resume Updates'],
   },
   {
-    key: 'LRN', name: '2.x Learning',
+    key: 'LRN', name: 'Learning',
     components: ['2.1 Certs & Courses', '2.2 Research', '2.3 Automation'],
   },
   {
-    key: 'FAM', name: '3.x Family & Life',
+    key: 'FAM', name: 'Family & Life',
     components: ['3.1 Kids', '3.2 Health', '3.3 Finance', '3.4 Legal', '3.5 Shopping'],
   },
   {
-    key: 'STRAV', name: '6.x Straventis',
+    key: 'STRAV', name: 'Straventis',
     components: ['6.1 Admin', '6.2 Webspace', '6.3 Client Work'],
   },
 ];
@@ -91,10 +97,6 @@ const WORKFLOW_SCHEME_NAME = 'santhoshOS Workflow Scheme';
 // tab: 'default' | 'space' | 'relational' — used when wiring to screen tabs
 
 const CUSTOM_FIELD_CONFIG = [
-  { name: 'Start Date/Time', type: 'com.atlassian.jira.plugin.system.customfieldtypes:datetime',
-    searcher: 'com.atlassian.jira.plugin.system.customfieldtypes:datetimerange', tab: 'default' },
-  { name: 'End Date/Time', type: 'com.atlassian.jira.plugin.system.customfieldtypes:datetime',
-    searcher: 'com.atlassian.jira.plugin.system.customfieldtypes:datetimerange', tab: 'default' },
   { name: 'URL(s)', type: 'com.atlassian.jira.plugin.system.customfieldtypes:textarea',
     searcher: 'com.atlassian.jira.plugin.system.customfieldtypes:textsearcher', tab: 'default' },
   { name: 'Estimated Time (hrs)', type: 'com.atlassian.jira.plugin.system.customfieldtypes:float',
@@ -109,6 +111,12 @@ const CUSTOM_FIELD_CONFIG = [
     searcher: 'com.atlassian.jira.plugin.system.customfieldtypes:textsearcher', tab: 'relational' },
 ];
 
+// Fields we deliberately do NOT create as custom fields, because a
+// native/locked equivalent already exists — kept here so
+// deleteRedundantCustomFields() knows what to clean up if it finds
+// versions of these already created by an earlier run.
+const REDUNDANT_FIELD_NAMES = ['Start Date/Time', 'End Date/Time'];
+
 // Built-in system fields to place on tabs (fieldId is the literal system key)
 const SYSTEM_FIELD_TABS = [
   { fieldId: 'summary', tab: 'default' },
@@ -116,8 +124,12 @@ const SYSTEM_FIELD_TABS = [
   { fieldId: 'labels', tab: 'default' },
   { fieldId: 'components', tab: 'default' },
   { fieldId: 'timetracking', tab: 'default' },       // covers estimate; kept alongside custom hrs fields
+  { fieldId: 'duedate', tab: 'default' },             // native system field — true built-in, no custom field needed
   { fieldId: 'parent', tab: 'relational' },
-  // Epic Name is auto-provisioned by the software template; wired dynamically (see wireEpicNameField_)
+  // "Start date" is a locked, auto-provisioned field (not a true system
+  // field, but not something to create either) — resolved by name at
+  // runtime in wireNativeStartDateField_(), since its ID isn't a fixed
+  // literal like the ones above.
 ];
 
 const SCREEN_NAME = 'santhoshOS Work Item Screen';
@@ -191,6 +203,7 @@ function jiraRequest_(method, path, payload) {
 
 function runFullJiraSetup() {
   Logger.log('========== SANTHOSHOS JIRA SETUP — FULL RUN ==========');
+  deleteRedundantCustomFields();
   const statuses = createStatuses();
   const workflowName = createWorkflow(statuses);
   const workflowSchemeId = createWorkflowScheme(workflowName);
@@ -203,6 +216,28 @@ function runFullJiraSetup() {
   Logger.log('Manual follow-up needed:');
   Logger.log('  1. Enable "Goals" and "Project" (Atlassian Home) fields per project via UI.');
   Logger.log('  2. Optionally install a status-color marketplace app for 5 distinct colors.');
+}
+
+// ==================== PHASE 0: DELETE REDUNDANT CUSTOM FIELDS ====================
+// Removes any custom fields this pipeline previously created that turned
+// out to duplicate a native/locked Jira field (Start Date/Time, End
+// Date/Time — superseded by native "Start date" and "duedate"). Safe to
+// re-run: does nothing if they're already gone.
+
+function deleteRedundantCustomFields() {
+  Logger.log('--- Phase 0: Delete Redundant Custom Fields ---');
+  const allFields = jiraRequest_('GET', '/rest/api/3/field') || [];
+  REDUNDANT_FIELD_NAMES.forEach(function (name) {
+    const f = allFields.find(function (x) { return x.name === name; });
+    if (!f) {
+      Logger.log('⏭️  "' + name + '" not present — nothing to delete.');
+      return;
+    }
+    const res = UrlFetchApp.fetch(getSiteUrl_() + '/rest/api/3/field/' + f.id, {
+      method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true,
+    });
+    Logger.log((res.getResponseCode() < 300 ? '🗑️  Deleted redundant field: ' : '❌ Failed to delete: ') + name);
+  });
 }
 
 // ==================== PHASE 1: STATUSES ====================
@@ -383,7 +418,20 @@ function createScreenAndTabs(customFieldIds) {
     addFieldToTab_(screen.id, tabIds[f.tab], f.id);
   });
 
+  // "Start date" — locked, auto-provisioned field, not a fixed system key; resolve by name
+  wireNativeStartDateField_(screen.id, tabIds);
+
   return { screenId: screen.id, tabIds: tabIds };
+}
+
+function wireNativeStartDateField_(screenId, tabIds) {
+  const allFields = jiraRequest_('GET', '/rest/api/3/field') || [];
+  const startDateField = allFields.find(function (f) { return f.name === 'Start date'; });
+  if (!startDateField) {
+    Logger.log('⚠️ Native "Start date" field not found by name — check spelling/casing on your site, or add it to the tab manually.');
+    return;
+  }
+  addFieldToTab_(screenId, tabIds.default, startDateField.id);
 }
 
 function addFieldToTab_(screenId, tabId, fieldId) {
