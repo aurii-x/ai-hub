@@ -1,9 +1,23 @@
+
 /**
  * Jira Full Setup — santhoshOS Migration
  * ─────────────────────────────────────────
  * Version 2.0  |  July 2026
  *
  * CHANGELOG
+ * v2.8 - Reverted to software/Kanban (Workstream confirmed NOT to
+ *        support Goals/Projects linking via live testing). Renamed
+ *        all 4 Spaces with numeric prefixes matching the master
+ *        naming convention (1.x Career Development, 2.x Learning,
+ *        3.x Family & Life, 6.x Straventis) — keys unchanged.
+ * v2.7 - Switched to the "Project management" classic Business template
+ *        (jira-core-project-management) — hierarchy is Workstream →
+ *        Task → Sub-task, no Bug/Story clutter. Removed Epic Name
+ *        field wiring (not applicable — that's a Software-specific
+ *        quirk). UNCONFIRMED whether Atlassian Projects/Goals linking
+ *        works on Workstream the same way it does on Epic — test this
+ *        first before building further, per the log note at the end
+ *        of runFullJiraSetup().
  * v2.6 - Reverted to software project type with Epic restored.
  *        Atlassian Projects/Goals link to a parent-level work item
  *        (Epic by default in software spaces) — Business-type projects
@@ -75,28 +89,30 @@
 
 const SPACE_CONFIG = [
   {
-    key: 'CARE', name: 'Career Development',
+    key: 'CARE', name: '1.x Career Development',
     components: ['1.1 Deep Work', '1.2 Job Search', '1.3 Resume Updates'],
   },
   {
-    key: 'LRN', name: 'Learning',
+    key: 'LRN', name: '2.x Learning',
     components: ['2.1 Certs & Courses', '2.2 Research', '2.3 Automation'],
   },
   {
-    key: 'FAM', name: 'Family & Life',
+    key: 'FAM', name: '3.x Family & Life',
     components: ['3.1 Kids', '3.2 Health', '3.3 Finance', '3.4 Legal', '3.5 Shopping'],
   },
   {
-    key: 'STRAV', name: 'Straventis',
+    key: 'STRAV', name: '6.x Straventis',
     components: ['6.1 Admin', '6.2 Webspace', '6.3 Client Work'],
   },
 ];
 
-// Classic (company-managed) software template — restored from the
-// earlier Business-type revert. Epic hierarchy is required for
-// Atlassian Projects/Goals linking (which links to a parent-level
-// work item — Epic by default in software spaces). Story/Bug come
-// along by default with this template; ignore or hide later.
+// Classic (company-managed) software Kanban template. Confirmed via
+// testing: Workstream (Business "Project management" template) does
+// NOT support Atlassian Projects/Goals linking — only Epic does, per
+// Atlassian's docs ("epic by default in software spaces"). This is
+// the template that actually delivers the Goals/Projects requirement.
+// Story/Bug come along by default with this template; ignore or hide
+// later — not worth scripting removal for 2 unused types.
 const PROJECT_TYPE_KEY = 'software';
 const PROJECT_TEMPLATE_KEY = 'com.pyxis.greenhopper.jira:gh-kanban-template';
 
@@ -237,9 +253,9 @@ function runFullJiraSetup() {
   Logger.log('Manual follow-up needed:');
   Logger.log('  1. Check Settings → Issues → Statuses for duplicate New/Planned/etc.');
   Logger.log('     (see workflow creation caveat in comments) — clean up manually if so.');
-  Logger.log('  2. Verify "Atlassian Projects" section appears on an Epic (parent-level).');
-  Logger.log('  3. Hide/ignore default Story & Bug issue types if you don\'t want them.');
-  Logger.log('  4. Optionally install a status-color marketplace app for 5 distinct colors.');
+  Logger.log('  2. Verify "Atlassian Projects" section appears on a Workstream —');
+  Logger.log('     this is UNCONFIRMED and the main thing to test before building further.');
+  Logger.log('  3. Optionally install a status-color marketplace app for 5 distinct colors.');
 }
 
 // ==================== PHASE 8: FIELD CONFIGURATION (hide Assignee/Reporter) ====================
@@ -638,6 +654,46 @@ function wireSchemesToProjects(projects, workflowSchemeId, issueTypeScreenScheme
   });
 }
 
+// ==================== VERIFICATION ====================
+// Confirms each of the 4 projects is actually wired to the shared
+// santhoshOS schemes, not an auto-generated per-project one Jira
+// silently creates at project-creation time (Jira does this on its
+// own as a side effect of the project template — not something this
+// script triggers, but worth verifying it got overridden correctly).
+
+function verifyProjectSchemeAssociations() {
+  Logger.log('=== Verifying project scheme associations ===');
+
+  const expectedITSS = findByName_('/rest/api/3/issuetypescreenscheme?maxResults=100', 'values', ISSUE_TYPE_SCREEN_SCHEME_NAME);
+  const expectedWFS = findByName_('/rest/api/3/workflowscheme?maxResults=100', 'values', WORKFLOW_SCHEME_NAME);
+
+  if (!expectedITSS) Logger.log('⚠️ Could not find expected issue type screen scheme "' + ISSUE_TYPE_SCREEN_SCHEME_NAME + '" — is it still named the same?');
+  if (!expectedWFS) Logger.log('⚠️ Could not find expected workflow scheme "' + WORKFLOW_SCHEME_NAME + '" — is it still named the same?');
+
+  SPACE_CONFIG.forEach(function (space) {
+    const project = jiraRequest_('GET', '/rest/api/3/project/' + space.key);
+    if (!project) { Logger.log('❌ ' + space.key + ': project not found.'); return; }
+
+    if (expectedITSS) {
+      const itssRes = jiraRequest_('GET', '/rest/api/3/issuetypescreenscheme/project?projectId=' + project.id);
+      const actual = itssRes && itssRes.values && itssRes.values[0] ? itssRes.values[0].issueTypeScreenSchemeId : null;
+      const ok = actual === expectedITSS.id;
+      Logger.log((ok ? '✅' : '❌') + ' ' + space.key + ' issue type screen scheme: ' +
+        (ok ? 'correct (shared)' : 'MISMATCH — using scheme ID ' + actual + ', expected ' + expectedITSS.id));
+    }
+
+    if (expectedWFS) {
+      const wfsRes = jiraRequest_('GET', '/rest/api/3/workflowscheme/project?projectId=' + project.id);
+      const actual = wfsRes && wfsRes.values && wfsRes.values[0] ? wfsRes.values[0].workflowSchemeId : null;
+      const ok = actual === expectedWFS.id;
+      Logger.log((ok ? '✅' : '❌') + ' ' + space.key + ' workflow scheme: ' +
+        (ok ? 'correct (shared)' : 'MISMATCH — using scheme ID ' + actual + ', expected ' + expectedWFS.id));
+    }
+  });
+
+  Logger.log('=== Verification complete ===');
+}
+
 // ==================== GLOBAL FACTORY RESET ====================
 // Per your instruction: no dry run. Deletes ALL projects on the site,
 // plus the custom fields, screen, screen scheme, issue type screen
@@ -679,7 +735,11 @@ function factoryResetJira() {
       const res = UrlFetchApp.fetch(getSiteUrl_() + '/rest/api/3/screens/' + s.id, {
         method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true,
       });
-      Logger.log((res.getResponseCode() < 300 ? '🗑️  Deleted screen' : '❌ Failed to delete screen'));
+      if (res.getResponseCode() < 300) {
+        Logger.log('🗑️  Deleted screen');
+      } else {
+        Logger.log('❌ Failed to delete screen: HTTP ' + res.getResponseCode() + ' — ' + res.getContentText());
+      }
     }
   }
 
@@ -701,5 +761,12 @@ function deleteByName_(searchPath, listKey, name, deletePathPrefix) {
   const delRes = UrlFetchApp.fetch(getSiteUrl_() + deletePathPrefix + item.id, {
     method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true,
   });
-  Logger.log((delRes.getResponseCode() < 300 ? '🗑️  Deleted ' : '❌ Failed to delete ') + name);
+  if (delRes.getResponseCode() < 300) {
+    Logger.log('🗑️  Deleted ' + name);
+  } else {
+    Logger.log('❌ Failed to delete ' + name + ': HTTP ' + delRes.getResponseCode() + ' — ' + delRes.getContentText());
+    Logger.log('   (Likely cause: a trashed-but-not-purged project still references this.');
+    Logger.log('    Empty Jira Settings → Projects → Trash, then retry — or ignore, since');
+    Logger.log('    runFullJiraSetup() will just reuse the existing object by name.)');
+  }
 }
