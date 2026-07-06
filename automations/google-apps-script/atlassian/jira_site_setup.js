@@ -4,6 +4,24 @@
  * Version 2.0  |  July 2026
  *
  * CHANGELOG
+ * v2.6 - Reverted to software project type with Epic restored.
+ *        Atlassian Projects/Goals link to a parent-level work item
+ *        (Epic by default in software spaces) — Business-type projects
+ *        can't reliably support this. No in-place conversion exists
+ *        between Business and Software project types in Jira Cloud
+ *        (confirmed via Atlassian support docs), so this requires a
+ *        full wipe (factoryResetJira()) and rebuild, not a migration —
+ *        acceptable since no real task data exists yet.
+ * v2.5 - Fixed workflow creation payload: statuses must be top-level,
+ *        workflows[].statuses only reference them by statusReference
+ *        (previously nested full status defs inside the workflow,
+ *        which Jira read as an empty top-level statuses list).
+ *        Added Phase 8: Field Configuration to hide Assignee and
+ *        Reporter across all 4 Spaces (Screens alone can't do this —
+ *        Field Configuration is the correct mechanism for hidden/
+ *        required field behavior). Goals/Project fields confirmed
+ *        NOT scriptable — Atlassian Home linking, not a normal field,
+ *        and possibly unavailable on Business-type (non-Epic) spaces.
  * v2.4 - Removed Start Date/Time and End Date/Time custom fields —
  *        replaced with native "duedate" (true system field) and
  *        "Start date" (locked, auto-provisioned field, resolved by
@@ -74,12 +92,13 @@ const SPACE_CONFIG = [
   },
 ];
 
-// Classic (company-managed) business template. Hierarchy is Task →
-// Subtask only — Jira's classic Business templates do not reliably
-// support Epic as a work type (the manual workaround is documented as
-// flaky and unfixable without Atlassian Support, unavailable on Free).
-const PROJECT_TYPE_KEY = 'business';
-const PROJECT_TEMPLATE_KEY = 'com.atlassian.jira-core-project-templates:jira-core-project-management';
+// Classic (company-managed) software template — restored from the
+// earlier Business-type revert. Epic hierarchy is required for
+// Atlassian Projects/Goals linking (which links to a parent-level
+// work item — Epic by default in software spaces). Story/Bug come
+// along by default with this template; ignore or hide later.
+const PROJECT_TYPE_KEY = 'software';
+const PROJECT_TEMPLATE_KEY = 'com.pyxis.greenhopper.jira:gh-kanban-template';
 
 // ==================== CONFIG: WORKFLOW STATUSES ====================
 
@@ -212,10 +231,74 @@ function runFullJiraSetup() {
   const issueTypeScreenSchemeId = createIssueTypeScreenScheme(screenInfo.screenId);
   const projects = createProjectsAndComponents();
   wireSchemesToProjects(projects, workflowSchemeId, issueTypeScreenSchemeId);
+  const fieldConfigSchemeId = createFieldConfiguration();
+  wireFieldConfigSchemeToProjects_(fieldConfigSchemeId, projects);
   Logger.log('========== DONE ==========');
   Logger.log('Manual follow-up needed:');
-  Logger.log('  1. Enable "Goals" and "Project" (Atlassian Home) fields per project via UI.');
-  Logger.log('  2. Optionally install a status-color marketplace app for 5 distinct colors.');
+  Logger.log('  1. Check Settings → Issues → Statuses for duplicate New/Planned/etc.');
+  Logger.log('     (see workflow creation caveat in comments) — clean up manually if so.');
+  Logger.log('  2. Verify "Atlassian Projects" section appears on an Epic (parent-level).');
+  Logger.log('  3. Hide/ignore default Story & Bug issue types if you don\'t want them.');
+  Logger.log('  4. Optionally install a status-color marketplace app for 5 distinct colors.');
+}
+
+// ==================== PHASE 8: FIELD CONFIGURATION (hide Assignee/Reporter) ====================
+// This is a DIFFERENT mechanism from Screens: Screens control which
+// fields exist on the create/edit/view form at all. Field Configuration
+// controls per-field behavior (required/optional/hidden) — this is the
+// correct place to hide Assignee and Reporter from the Details panel,
+// since Screens alone can't fully suppress them.
+
+const FIELD_CONFIG_NAME = 'santhoshOS Field Configuration';
+const FIELD_CONFIG_SCHEME_NAME = 'santhoshOS Field Configuration Scheme';
+const FIELDS_TO_HIDE = ['assignee', 'reporter'];
+
+function createFieldConfiguration() {
+  Logger.log('--- Phase 8: Field Configuration (hide Assignee/Reporter) ---');
+
+  let fieldConfig = findByName_('/rest/api/3/fieldconfiguration?maxResults=100', 'values', FIELD_CONFIG_NAME);
+  if (!fieldConfig) {
+    fieldConfig = jiraRequest_('POST', '/rest/api/3/fieldconfiguration', {
+      name: FIELD_CONFIG_NAME, description: 'Hides Assignee and Reporter across all santhoshOS Spaces',
+    });
+    if (fieldConfig) Logger.log('✅ Created field configuration: ' + FIELD_CONFIG_NAME);
+  } else {
+    Logger.log('⏭️  Field configuration already exists — skipping creation.');
+  }
+  if (!fieldConfig || !fieldConfig.id) { Logger.log('❌ No field configuration — aborting phase.'); return; }
+
+  const hideResult = jiraRequest_('PUT', '/rest/api/3/fieldconfiguration/' + fieldConfig.id + '/fields', {
+    fieldConfigurationItems: FIELDS_TO_HIDE.map(function (id) { return { fieldId: id, isHidden: true }; }),
+  });
+  Logger.log((hideResult !== null ? '✅' : '❌') + ' Set Assignee + Reporter to hidden.');
+
+  let scheme = findByName_('/rest/api/3/fieldconfigurationscheme?maxResults=100', 'values', FIELD_CONFIG_SCHEME_NAME);
+  if (!scheme) {
+    scheme = jiraRequest_('POST', '/rest/api/3/fieldconfigurationscheme', { name: FIELD_CONFIG_SCHEME_NAME });
+    if (scheme) Logger.log('✅ Created field configuration scheme: ' + FIELD_CONFIG_SCHEME_NAME);
+  } else {
+    Logger.log('⏭️  Field configuration scheme already exists — skipping creation.');
+  }
+  if (!scheme || !scheme.id) { Logger.log('❌ No scheme — aborting phase.'); return; }
+
+  jiraRequest_('PUT', '/rest/api/3/fieldconfigurationscheme/' + scheme.id + '/mapping', {
+    mappings: [{ issueTypeId: 'default', fieldConfigurationId: fieldConfig.id }],
+  });
+
+  return scheme.id;
+}
+
+function wireFieldConfigSchemeToProjects_(schemeId, projects) {
+  if (!schemeId) return;
+  projects.forEach(function (p) {
+    const res = UrlFetchApp.fetch(getSiteUrl_() + '/rest/api/3/fieldconfigurationscheme/project', {
+      method: 'put',
+      headers: { 'Authorization': getAuthHeader_(), 'Content-Type': 'application/json' },
+      payload: JSON.stringify({ fieldConfigurationSchemeId: schemeId, projectId: p.id }),
+      muteHttpExceptions: true,
+    });
+    Logger.log((res.getResponseCode() < 300 ? '✅' : '❌') + ' Field config scheme → ' + p.key);
+  });
 }
 
 // ==================== PHASE 0: DELETE REDUNDANT CUSTOM FIELDS ====================
@@ -290,14 +373,17 @@ function createWorkflow(statuses) {
     return WORKFLOW_NAME;
   }
 
-  const statusRefs = STATUS_CONFIG.map(function (s, i) { return 's' + i; });
+  const statusRefs = STATUS_CONFIG.map(function () { return Utilities.getUuid(); });
   const payload = {
     scope: { type: 'GLOBAL' },
+    statuses: STATUS_CONFIG.map(function (s, i) {
+      return { name: s.name, statusCategory: s.category, description: '', statusReference: statusRefs[i] };
+    }),
     workflows: [{
       name: WORKFLOW_NAME,
       description: 'Shared workflow across all santhoshOS Spaces',
       statuses: STATUS_CONFIG.map(function (s, i) {
-        return { statusReference: statusRefs[i], name: s.name, statusCategory: s.category };
+        return { statusReference: statusRefs[i], properties: {} };
       }),
       // All-to-all transitions for maximum flexibility (no rigid gating)
       transitions: (function () {
@@ -421,7 +507,22 @@ function createScreenAndTabs(customFieldIds) {
   // "Start date" — locked, auto-provisioned field, not a fixed system key; resolve by name
   wireNativeStartDateField_(screen.id, tabIds);
 
+  // Epic Name — auto-provisioned by the software template once an Epic
+  // exists on the site; wire to both Default and Relational tabs
+  wireEpicNameField_(screen.id, tabIds);
+
   return { screenId: screen.id, tabIds: tabIds };
+}
+
+function wireEpicNameField_(screenId, tabIds) {
+  const allFields = jiraRequest_('GET', '/rest/api/3/field') || [];
+  const epicNameField = allFields.find(function (f) { return f.name === 'Epic Name'; });
+  if (!epicNameField) {
+    Logger.log('⚠️ "Epic Name" field not found yet — it\'s usually auto-created the first time an Epic exists in a project. Re-run createScreenAndTabs() after creating one Epic if it\'s missing.');
+    return;
+  }
+  addFieldToTab_(screenId, tabIds.default, epicNameField.id);
+  addFieldToTab_(screenId, tabIds.relational, epicNameField.id);
 }
 
 function wireNativeStartDateField_(screenId, tabIds) {
