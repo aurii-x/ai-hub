@@ -47,6 +47,20 @@ const OUR_NAMES = {
 
 const SPACE_KEYS = ['CARE', 'LRN', 'FAM', 'STRAV'];
 
+// Genuine Jira system defaults — NOT orphans, expected on every site.
+// Anything else that isn't in OUR_NAMES gets flagged as a real orphan to check.
+const KNOWN_JIRA_DEFAULTS = [
+  'Default Screen Scheme', 'Default Issue Type Screen Scheme', 'Default Screen',
+  'Workflow Screen', 'Resolve Issue Screen', 'jira', 'Builds Workflow',
+  'Default Notification Scheme', 'Default Permission Scheme',
+];
+
+function classify_(name, ourName) {
+  if (name === ourName) return '✅ Site-specific (santhoshOS)';
+  if (KNOWN_JIRA_DEFAULTS.indexOf(name) !== -1) return 'Jira default';
+  return '⚠️ Other — verify, may be a real orphan';
+}
+
 // ==================== JIRA HELPERS ====================
 
 function jiraAuthHeader_() {
@@ -112,7 +126,7 @@ function generateJiraConfigReport() {
 
 function reportWorkTypes_(sheet) {
   section_(sheet, 'Work Types');
-  row_(sheet, ['Category', 'Name', 'Details', 'Ours?', 'Notes']);
+  row_(sheet, ['Category', 'Name', 'Details', 'Site Specific', 'Notes']);
 
   row_(sheet, ['Work type hierarchy', '(all)', 'Default Jira hierarchy (Epic > Story/Task/Bug > Subtask)', 'Default', 'Not customized']);
 
@@ -132,28 +146,28 @@ function reportWorkTypes_(sheet) {
     });
   }
 
-  const subtasks = isOk_(issueTypes) ? issueTypes.filter(function (it) { return it.subtask; }) : [];
-  row_(sheet, ['Sub-tasks', subtasks.map(function (s) { return s.name; }).join(', ') || '(none found)', '', 'Default', 'Standard Jira "Subtask" type']);
+  // Note: subtask status already visible per-row above via "subtask: true/false"
+  // in the Work type enumeration — no separate summary needed here.
 }
 
 // ==================== WORKFLOWS ====================
 
 function reportWorkflows_(sheet) {
   section_(sheet, 'Workflows');
-  row_(sheet, ['Category', 'Name', 'Details', 'Ours?', 'Notes']);
+  row_(sheet, ['Category', 'Name', 'Details', 'Site Specific', 'Notes']);
 
   const workflows = jiraGet_('/rest/api/3/workflow/search?maxResults=200');
   if (isOk_(workflows) && workflows.values) {
     workflows.values.forEach(function (w) {
-      const isOurs = w.id && w.id.name === OUR_NAMES.workflow;
-      row_(sheet, ['Workflow', (w.id ? w.id.name : w.name), w.description || '', isOurs ? '✅ Ours' : (w.isDefault ? 'Default' : 'Other'), '']);
+      const name = w.id ? w.id.name : w.name;
+      row_(sheet, ['Workflow', name, w.description || '', classify_(name, OUR_NAMES.workflow), '']);
     });
   }
 
   const wfSchemes = jiraGet_('/rest/api/3/workflowscheme?maxResults=100');
   if (isOk_(wfSchemes) && wfSchemes.values) {
     wfSchemes.values.forEach(function (s) {
-      row_(sheet, ['Workflow scheme', s.name, '', s.name === OUR_NAMES.workflowScheme ? '✅ Ours' : 'Other', '']);
+      row_(sheet, ['Workflow scheme', s.name, '', classify_(s.name, OUR_NAMES.workflowScheme), '']);
     });
   }
 }
@@ -162,26 +176,26 @@ function reportWorkflows_(sheet) {
 
 function reportScreens_(sheet) {
   section_(sheet, 'Screens');
-  row_(sheet, ['Category', 'Name', 'Details', 'Ours?', 'Notes']);
+  row_(sheet, ['Category', 'Name', 'Details', 'Site Specific', 'Notes']);
 
   const screens = jiraGet_('/rest/api/3/screens?maxResults=200');
   if (isOk_(screens) && screens.values) {
     screens.values.forEach(function (s) {
-      row_(sheet, ['Screen', s.name, s.description || '', s.name === OUR_NAMES.screen ? '✅ Ours' : 'Other', '']);
+      row_(sheet, ['Screen', s.name, s.description || '', classify_(s.name, OUR_NAMES.screen), '']);
     });
   }
 
   const screenSchemes = jiraGet_('/rest/api/3/screenscheme?maxResults=200');
   if (isOk_(screenSchemes) && screenSchemes.values) {
     screenSchemes.values.forEach(function (s) {
-      row_(sheet, ['Screen scheme', s.name, '', s.name === OUR_NAMES.screenScheme ? '✅ Ours' : 'Other — check if orphaned', '']);
+      row_(sheet, ['Screen scheme', s.name, '', classify_(s.name, OUR_NAMES.screenScheme), '']);
     });
   }
 
   const itss = jiraGet_('/rest/api/3/issuetypescreenscheme?maxResults=200');
   if (isOk_(itss) && itss.values) {
     itss.values.forEach(function (s) {
-      row_(sheet, ['Work type screen scheme', s.name, '', s.name === OUR_NAMES.issueTypeScreenScheme ? '✅ Ours' : 'Other — check if orphaned', '']);
+      row_(sheet, ['Work type screen scheme', s.name, '', classify_(s.name, OUR_NAMES.issueTypeScreenScheme), '']);
     });
   }
 }
@@ -190,21 +204,61 @@ function reportScreens_(sheet) {
 
 function reportFields_(sheet) {
   section_(sheet, 'Fields');
-  row_(sheet, ['Category', 'Name', 'Details', 'Ours?', 'Notes']);
+  row_(sheet, ['Category', 'Name', 'Details', 'Site Specific', 'Notes']);
 
   const fields = jiraGet_('/rest/api/3/field');
-  if (isOk_(fields)) {
-    const customFields = fields.filter(function (f) { return f.custom; });
-    customFields.forEach(function (f) {
-      row_(sheet, ['Custom field', f.name, f.id + ' — ' + (f.schema ? f.schema.type : ''), '✅ Ours (custom fields you created)', '']);
-    });
-    row_(sheet, ['System fields', '(all others)', fields.length - customFields.length + ' built-in fields', 'Default', 'Not enumerated individually']);
+  if (!isOk_(fields)) { row_(sheet, ['Fields', '(error)', '', '', 'Could not fetch']); return; }
+
+  const customFields = fields.filter(function (f) { return f.custom; });
+  const systemFields = fields.filter(function (f) { return !f.custom; });
+
+  // Build lookup: fieldId -> which tab it's on (if our screen exists)
+  const tabByFieldId = {};
+  const ourScreen = jiraGet_('/rest/api/3/screens?maxResults=200');
+  const screenMatch = isOk_(ourScreen) && ourScreen.values ? ourScreen.values.find(function (s) { return s.name === OUR_NAMES.screen; }) : null;
+  if (screenMatch) {
+    const tabs = jiraGet_('/rest/api/3/screens/' + screenMatch.id + '/tabs');
+    if (isOk_(tabs)) {
+      tabs.forEach(function (tab) {
+        const tabFields = jiraGet_('/rest/api/3/screens/' + screenMatch.id + '/tabs/' + tab.id + '/fields');
+        if (isOk_(tabFields)) {
+          tabFields.forEach(function (f) { tabByFieldId[f.id] = tab.name; });
+        }
+      });
+    }
   }
+
+  // Build lookup: fieldId -> hidden true/false (if our field configuration exists)
+  const hiddenByFieldId = {};
+  const fieldConfigs = jiraGet_('/rest/api/3/fieldconfiguration?maxResults=100');
+  const fcMatch = isOk_(fieldConfigs) && fieldConfigs.values ? fieldConfigs.values.find(function (f) { return f.name === OUR_NAMES.fieldConfig; }) : null;
+  if (fcMatch) {
+    const fcFields = jiraGet_('/rest/api/3/fieldconfiguration/' + fcMatch.id + '/fields');
+    if (isOk_(fcFields) && fcFields.values) {
+      fcFields.values.forEach(function (f) { hiddenByFieldId[f.id] = f.isHidden; });
+    }
+  }
+
+  customFields.forEach(function (f) {
+    const tab = tabByFieldId[f.id] || 'NOT on our screen';
+    row_(sheet, ['Custom field', f.name, f.id + ' — ' + (f.schema ? f.schema.type : ''), classify_(f.name, f.name), 'Tab: ' + tab]);
+  });
+
+  // Full enumeration of system fields with their actual configuration
+  systemFields.forEach(function (f) {
+    const tab = tabByFieldId[f.id];
+    const hidden = hiddenByFieldId[f.id];
+    let config;
+    if (hidden === true) config = 'Hidden (via field configuration)';
+    else if (tab) config = 'On screen — Tab: ' + tab;
+    else config = 'Not on our screen (Jira default placement applies)';
+    row_(sheet, ['System field', f.name, f.id, 'Jira default', config]);
+  });
 
   const fieldSchemes = jiraGet_('/rest/api/3/fieldconfigurationscheme?maxResults=100');
   if (isOk_(fieldSchemes) && fieldSchemes.values) {
     fieldSchemes.values.forEach(function (s) {
-      row_(sheet, ['Field scheme', s.name, '', s.name === OUR_NAMES.fieldConfigScheme ? '✅ Ours' : 'Other', '']);
+      row_(sheet, ['Field scheme', s.name, '', classify_(s.name, OUR_NAMES.fieldConfigScheme), '']);
     });
   }
 }
@@ -213,7 +267,7 @@ function reportFields_(sheet) {
 
 function reportPriorities_(sheet) {
   section_(sheet, 'Priorities');
-  row_(sheet, ['Category', 'Name', 'Details', 'Ours?', 'Notes']);
+  row_(sheet, ['Category', 'Name', 'Details', 'Site Specific', 'Notes']);
 
   const priorities = jiraGet_('/rest/api/3/priority');
   if (isOk_(priorities)) {
@@ -234,7 +288,7 @@ function reportPriorities_(sheet) {
 
 function reportWorkItemFeatures_(sheet) {
   section_(sheet, 'Work Item Features');
-  row_(sheet, ['Category', 'Name', 'Details', 'Ours?', 'Notes']);
+  row_(sheet, ['Category', 'Name', 'Details', 'Site Specific', 'Notes']);
 
   const config = jiraGet_('/rest/api/3/configuration');
   if (isOk_(config)) {
@@ -251,7 +305,7 @@ function reportWorkItemFeatures_(sheet) {
 
 function reportWorkItemAttributes_(sheet) {
   section_(sheet, 'Work Item Attributes');
-  row_(sheet, ['Category', 'Name', 'Details', 'Ours?', 'Notes']);
+  row_(sheet, ['Category', 'Name', 'Details', 'Site Specific', 'Notes']);
 
   const statuses = jiraGet_('/rest/api/3/statuses/search?maxResults=200');
   if (isOk_(statuses) && statuses.values) {
