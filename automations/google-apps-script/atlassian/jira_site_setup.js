@@ -1,215 +1,137 @@
-
 /**
- * Jira Full Setup — santhoshOS Migration
+ * Jira Full Setup 3.0 — santhoshOS Single Project
  * ─────────────────────────────────────────
- * Version 2.0  |  July 2026
+ * Version 3.0  |  July 2026
  *
- * CHANGELOG
- * v2.8 - Reverted to software/Kanban (Workstream confirmed NOT to
- *        support Goals/Projects linking via live testing). Renamed
- *        all 4 Spaces with numeric prefixes matching the master
- *        naming convention (1.x Career Development, 2.x Learning,
- *        3.x Family & Life, 6.x Straventis) — keys unchanged.
- * v2.7 - Switched to the "Project management" classic Business template
- *        (jira-core-project-management) — hierarchy is Workstream →
- *        Task → Sub-task, no Bug/Story clutter. Removed Epic Name
- *        field wiring (not applicable — that's a Software-specific
- *        quirk). UNCONFIRMED whether Atlassian Projects/Goals linking
- *        works on Workstream the same way it does on Epic — test this
- *        first before building further, per the log note at the end
- *        of runFullJiraSetup().
- * v2.6 - Reverted to software project type with Epic restored.
- *        Atlassian Projects/Goals link to a parent-level work item
- *        (Epic by default in software spaces) — Business-type projects
- *        can't reliably support this. No in-place conversion exists
- *        between Business and Software project types in Jira Cloud
- *        (confirmed via Atlassian support docs), so this requires a
- *        full wipe (factoryResetJira()) and rebuild, not a migration —
- *        acceptable since no real task data exists yet.
- * v2.5 - Fixed workflow creation payload: statuses must be top-level,
- *        workflows[].statuses only reference them by statusReference
- *        (previously nested full status defs inside the workflow,
- *        which Jira read as an empty top-level statuses list).
- *        Added Phase 8: Field Configuration to hide Assignee and
- *        Reporter across all 4 Spaces (Screens alone can't do this —
- *        Field Configuration is the correct mechanism for hidden/
- *        required field behavior). Goals/Project fields confirmed
- *        NOT scriptable — Atlassian Home linking, not a normal field,
- *        and possibly unavailable on Business-type (non-Epic) spaces.
- * v2.4 - Removed Start Date/Time and End Date/Time custom fields —
- *        replaced with native "duedate" (true system field) and
- *        "Start date" (locked, auto-provisioned field, resolved by
- *        name at runtime). Added deleteRedundantCustomFields() as
- *        Phase 0, run first in runFullJiraSetup(), to clean up any
- *        already-created copies from earlier runs.
- * v2.3 - Fixed workflow transitions missing required 'id' field.
- *        Renamed Learning Space key LEARN → LRN to avoid a key
- *        conflict with a leftover trashed project from the original
- *        v1 team-managed run (Jira reserves keys of deleted projects
- *        for a retention period even though GET returns 404 for them).
- * v2.2 - Fixed 4 bugs found on first real run against the API:
- *        (1) statuses endpoint was /rest/api/3/statuses/create (404),
- *            correct path is /rest/api/3/statuses
- *        (2) custom field searcherKey used wrong namespace
- *            (customfieldsearchers → customfieldtypes)
- *        (3) project template key was invalid; corrected to
- *            com.atlassian.jira-core-project-templates:jira-core-project-management
- *        (4) workflow-exists check gave a false positive (found
- *            unrelated search results); now requires exact name match
- * v2.1 - Switched to business project type, Epic dropped entirely.
- *        Hierarchy is now Task → Subtask only. Removed Epic Name
- *        field wiring since Epic no longer exists as a work type.
- * v2.0 - Full rebuild: company-managed projects, custom workflow
- *        (5 statuses), 16 properties across 3 screen tabs, 4 Spaces
- *        with Components, and a global factory-reset function.
- * v1.1 - Credentials moved to Script Properties (see Jira_Space_Setup_v1)
- * v1.0 - Initial minimal team-managed Space creation
+ * FIELD DESIGN (final, confirmed)
+ *   Category  — custom single-select field, 14 granular values
+ *               (1.1 Deep Work ... 6.3 Client Work) — YOU set this manually
+ *   Component — native Jira field, 4 top-level values
+ *               (1.x Career Development, 2.x Learning, 3.x Family & Life,
+ *               6.x Straventis) — set AUTOMATICALLY by JIRA_update_Scheduled.gs
+ *               based on which Category you picked. Not done here —
+ *               this script only creates the fields/values; the sync
+ *               logic lives in the companion script.
  *
- * CREDENTIALS
- * Set as Script Properties (Project Settings → Script Properties):
+ * FUNCTIONS (in dependency order, not necessarily your original numbering)
+ *   populateComponent()        — creates the 4 native Components
+ *   populateCategory()         — creates the Category custom field + 14 options
+ *   setupStatuses()            — 6 statuses across 3 categories
+ *   setupWorkFlows()           — 1 shared workflow, all-to-all transitions
+ *   setupWorkflowSchemes()     — scheme wrapping the workflow above
+ *   setupWorkTypes()           — confirms Epic/Task/Sub-task exist (they're
+ *                                 Jira defaults, nothing to create)
+ *   setupWorkTypeSchema()      — restricts the project to Epic/Task/Sub-task,
+ *                                 excludes Story/Bug (this IS the hierarchy
+ *                                 control — see note in the function)
+ *   setupPriorities()          — combined with scheme per your instruction:
+ *                                 low/normal/high/urgent, old defaults removed
+ *   setupScreens()             — 3-tab screen (Default/Space/Relational)
+ *   setupScreenSchemes()       — scheme wrapping the screen above
+ *   setupWorkTypeScreenSchemes() — scheme wrapping the screen scheme above
+ *   createProject()            — single project, all schemes pre-assigned
+ *   runFullJiraSetup()         — orchestrator, calls everything in order
+ *   factoryResetJira()         — wipes it all, no dry run, as established
+ *
+ * NOTE ON WORK TYPE HIERARCHY (function 5 in your original list)
+ * There's no separate "hierarchy" API call — hierarchy is just each work
+ * type's fixed hierarchyLevel (-1 Sub-task, 0 Task, 1 Epic), which Jira
+ * already has. Excluding Story and Bug via the Work Type Scheme
+ * (setupWorkTypeSchema) is what actually achieves "Epic top level, Task
+ * and Sub-task enabled, Story and Bug disabled" — there's nothing further
+ * to configure once that scheme is applied.
+ *
+ * CREDENTIALS (Script Properties)
  *   JIRA_SITE_URL, JIRA_EMAIL, JIRA_API_TOKEN
  *
  * RUN ORDER
  *   checkSetup() → testConnection() → runFullJiraSetup()
  *
- * Each phase inside runFullJiraSetup() is also individually callable
- * for debugging: createStatuses(), createWorkflow(), createCustomFields(),
- * createScreenAndTabs(), createProjectsAndComponents(), wireSchemesToProjects()
- *
- * MANUAL STEPS THIS SCRIPT CANNOT DO
- * - "Goals (Atlassian)" and "Project (Atlassian)" fields: these are
- *   built-in Atlassian Home fields, enabled per issue type via the UI
- *   (issue view → ••• → "Add Goals field" or similar), not creatable
- *   via API. Enable once per project after this script runs.
- * - Status colors beyond the native 3 (grey/blue/green): needs a
- *   marketplace app (e.g. "Status Colors for Jira"), not scriptable.
+ * KNOWN LIMITATION (carried over, still true)
+ * Jira Software Kanban boards default to a locked "Simplified workflow."
+ * If the project is still on it after this runs, one manual step:
+ * Board Settings → Columns → Workflow type → switch off "Simplified".
  */
 
-// ==================== CONFIG: SPACES & COMPONENTS ====================
+// ==================== CONFIG ====================
 
-const SPACE_CONFIG = [
-  {
-    key: 'CARE', name: '1.x Career Development',
-    components: ['1.1 Deep Work', '1.2 Job Search', '1.3 Resume Updates'],
-  },
-  {
-    key: 'LRN', name: '2.x Learning',
-    components: ['2.1 Certs & Courses', '2.2 Research', '2.3 Automation'],
-  },
-  {
-    key: 'FAM', name: '3.x Family & Life',
-    components: ['3.1 Kids', '3.2 Health', '3.3 Finance', '3.4 Legal', '3.5 Shopping'],
-  },
-  {
-    key: 'STRAV', name: '6.x Straventis',
-    components: ['6.1 Admin', '6.2 Webspace', '6.3 Client Work'],
-  },
-];
-
-// Classic (company-managed) software Kanban template. Confirmed via
-// testing: Workstream (Business "Project management" template) does
-// NOT support Atlassian Projects/Goals linking — only Epic does, per
-// Atlassian's docs ("epic by default in software spaces"). This is
-// the template that actually delivers the Goals/Projects requirement.
-// Story/Bug come along by default with this template; ignore or hide
-// later — not worth scripting removal for 2 unused types.
+const PROJECT_KEY = 'OS';
+const PROJECT_NAME = 'santhoshOS';
 const PROJECT_TYPE_KEY = 'software';
 const PROJECT_TEMPLATE_KEY = 'com.pyxis.greenhopper.jira:gh-kanban-template';
 
-// ==================== CONFIG: WORKFLOW STATUSES ====================
+const COMPONENTS = [
+  '1.x Career Development', '2.x Learning', '3.x Family & Life', '6.x Straventis',
+];
+
+const CATEGORY_FIELD_NAME = 'Category';
+const CATEGORY_OPTIONS = [
+  '1.1 Deep Work', '1.2 Job Search', '1.3 Resume Updates',
+  '2.1 Certs & Courses', '2.2 Research', '2.3 Automation',
+  '3.1 Kids', '3.2 Health', '3.3 Finance', '3.4 Legal', '3.5 Shopping',
+  '6.1 Admin', '6.2 Webspace', '6.3 Client Work',
+];
+
+const WORK_TYPE_SCHEME_NAME = 'santhoshOS Work Type Scheme';
+const ALLOWED_WORK_TYPES = ['Epic', 'Task', 'Sub-task']; // Story, Bug excluded
 
 const STATUS_CONFIG = [
   { name: 'New', category: 'TODO' },
-  { name: 'Planned', category: 'TODO' },
+  { name: 'Backlog', category: 'TODO' },
   { name: 'In Progress', category: 'IN_PROGRESS' },
+  { name: 'Deferred', category: 'IN_PROGRESS' },
   { name: 'Done', category: 'DONE' },
   { name: 'Archived', category: 'DONE' },
 ];
-const WORKFLOW_NAME = 'santhoshOS Standard Workflow';
+const WORKFLOW_NAME = 'santhoshos default project workflow';
 const WORKFLOW_SCHEME_NAME = 'santhoshOS Workflow Scheme';
 
-// ==================== CONFIG: CUSTOM FIELDS ====================
-// tab: 'default' | 'space' | 'relational' — used when wiring to screen tabs
-
-const CUSTOM_FIELD_CONFIG = [
-  { name: 'URL(s)', type: 'com.atlassian.jira.plugin.system.customfieldtypes:textarea',
-    searcher: 'com.atlassian.jira.plugin.system.customfieldtypes:textsearcher', tab: 'default' },
-  { name: 'Estimated Time (hrs)', type: 'com.atlassian.jira.plugin.system.customfieldtypes:float',
-    searcher: 'com.atlassian.jira.plugin.system.customfieldtypes:exactnumber', tab: 'default' },
-  { name: 'Tracked Time (hrs)', type: 'com.atlassian.jira.plugin.system.customfieldtypes:float',
-    searcher: 'com.atlassian.jira.plugin.system.customfieldtypes:exactnumber', tab: 'default' },
-  { name: 'Rize Time Entry ID', type: 'com.atlassian.jira.plugin.system.customfieldtypes:textfield',
-    searcher: 'com.atlassian.jira.plugin.system.customfieldtypes:textsearcher', tab: 'space' },
-  { name: 'Rize ID', type: 'com.atlassian.jira.plugin.system.customfieldtypes:textfield',
-    searcher: 'com.atlassian.jira.plugin.system.customfieldtypes:textsearcher', tab: 'space' },
-  { name: 'Confluence Page(s)', type: 'com.atlassian.jira.plugin.system.customfieldtypes:textarea',
-    searcher: 'com.atlassian.jira.plugin.system.customfieldtypes:textsearcher', tab: 'relational' },
-];
-
-// Fields we deliberately do NOT create as custom fields, because a
-// native/locked equivalent already exists — kept here so
-// deleteRedundantCustomFields() knows what to clean up if it finds
-// versions of these already created by an earlier run.
-const REDUNDANT_FIELD_NAMES = ['Start Date/Time', 'End Date/Time'];
-
-// Built-in system fields to place on tabs (fieldId is the literal system key)
-const SYSTEM_FIELD_TABS = [
-  { fieldId: 'summary', tab: 'default' },
-  { fieldId: 'description', tab: 'default' },
-  { fieldId: 'labels', tab: 'default' },
-  { fieldId: 'components', tab: 'default' },
-  { fieldId: 'timetracking', tab: 'default' },       // covers estimate; kept alongside custom hrs fields
-  { fieldId: 'duedate', tab: 'default' },             // native system field — true built-in, no custom field needed
-  { fieldId: 'parent', tab: 'relational' },
-  // "Start date" is a locked, auto-provisioned field (not a true system
-  // field, but not something to create either) — resolved by name at
-  // runtime in wireNativeStartDateField_(), since its ID isn't a fixed
-  // literal like the ones above.
-];
+const PRIORITY_CONFIG = ['Low', 'Normal', 'High', 'Urgent'];
+const DEFAULT_PRIORITY_NAME = 'Normal';
 
 const SCREEN_NAME = 'santhoshOS Work Item Screen';
 const SCREEN_SCHEME_NAME = 'santhoshOS Screen Scheme';
 const ISSUE_TYPE_SCREEN_SCHEME_NAME = 'santhoshOS Issue Type Screen Scheme';
 
+const SYSTEM_FIELD_TABS = [
+  { fieldId: 'summary', tab: 'default' },
+  { fieldId: 'description', tab: 'default' },
+  { fieldId: 'labels', tab: 'default' },
+  { fieldId: 'components', tab: 'default' },
+  { fieldId: 'timetracking', tab: 'default' },
+  { fieldId: 'duedate', tab: 'default' },
+  { fieldId: 'parent', tab: 'relational' },
+];
+
 // ==================== CREDENTIALS / CORE HELPERS ====================
 
 function checkSetup() {
   const props = PropertiesService.getScriptProperties();
-  const siteUrl = props.getProperty('JIRA_SITE_URL');
-  const email = props.getProperty('JIRA_EMAIL');
-  const token = props.getProperty('JIRA_API_TOKEN');
-  Logger.log('JIRA_SITE_URL: ' + (siteUrl || '❌ NOT SET'));
-  Logger.log('JIRA_EMAIL: ' + (email || '❌ NOT SET'));
-  Logger.log('JIRA_API_TOKEN: ' + (token ? token.substring(0, 8) + '... (set)' : '❌ NOT SET'));
+  ['JIRA_SITE_URL', 'JIRA_EMAIL', 'JIRA_API_TOKEN'].forEach(function (key) {
+    Logger.log(key + ': ' + (props.getProperty(key) ? '✅ set' : '❌ NOT SET'));
+  });
 }
 
 function testConnection() {
   const res = jiraRequest_('GET', '/rest/api/3/myself');
-  if (res && res.accountId) {
-    Logger.log('✅ Connected as: ' + res.displayName + ' (' + res.accountId + ')');
-  } else {
-    Logger.log('❌ Connection failed. Check checkSetup().');
-  }
+  if (res && res.accountId) Logger.log('✅ Connected as: ' + res.displayName);
+  else Logger.log('❌ Connection failed. Check checkSetup().');
 }
 
 function getAuthHeader_() {
   const props = PropertiesService.getScriptProperties();
-  const credentials = Utilities.base64Encode(props.getProperty('JIRA_EMAIL') + ':' + props.getProperty('JIRA_API_TOKEN'));
-  return 'Basic ' + credentials;
+  return 'Basic ' + Utilities.base64Encode(props.getProperty('JIRA_EMAIL') + ':' + props.getProperty('JIRA_API_TOKEN'));
 }
-
 function getSiteUrl_() {
   const url = PropertiesService.getScriptProperties().getProperty('JIRA_SITE_URL');
   return url ? url.replace(/\/$/, '') : url;
 }
-
 function getMyAccountId_() {
   const me = jiraRequest_('GET', '/rest/api/3/myself');
   return me ? me.accountId : null;
 }
 
 function jiraRequest_(method, path, payload) {
-  const url = getSiteUrl_() + path;
   const options = {
     method: method,
     headers: { 'Authorization': getAuthHeader_(), 'Accept': 'application/json' },
@@ -217,177 +139,133 @@ function jiraRequest_(method, path, payload) {
     muteHttpExceptions: true,
   };
   if (payload) options.payload = JSON.stringify(payload);
-
   Logger.log('→ ' + method + ' ' + path);
-  const response = UrlFetchApp.fetch(url, options);
+  const response = UrlFetchApp.fetch(getSiteUrl_() + path, options);
   const code = response.getResponseCode();
   const body = response.getContentText();
+  if (code >= 200 && code < 300) return body ? JSON.parse(body) : {};
+  if (code === 404) { Logger.log('  (404 — not found)'); return null; }
+  Logger.log('  ❌ HTTP ' + code + ': ' + body);
+  return null;
+}
 
-  if (code >= 200 && code < 300) {
-    return body ? JSON.parse(body) : {};
-  } else if (code === 404) {
-    Logger.log('  (404 — not found)');
-    return null;
-  } else {
-    Logger.log('  ❌ HTTP ' + code + ': ' + body);
-    return null;
-  }
+function findByName_(path, listKey, name) {
+  const res = jiraRequest_('GET', path);
+  const list = res && res[listKey] ? res[listKey] : (Array.isArray(res) ? res : []);
+  return list.find(function (item) { return item.name === name; }) || null;
 }
 
 // ==================== ORCHESTRATOR ====================
 
 function runFullJiraSetup() {
-  Logger.log('========== SANTHOSHOS JIRA SETUP — FULL RUN ==========');
-  deleteRedundantCustomFields();
-  const statuses = createStatuses();
-  const workflowName = createWorkflow(statuses);
-  const workflowSchemeId = createWorkflowScheme(workflowName);
-  const fieldIds = createCustomFields();
-  const screenInfo = createScreenAndTabs(fieldIds);
-  const issueTypeScreenSchemeId = createIssueTypeScreenScheme(screenInfo.screenId);
-  const projects = createProjectsAndComponents();
-  wireSchemesToProjects(projects, workflowSchemeId, issueTypeScreenSchemeId);
-  const fieldConfigSchemeId = createFieldConfiguration();
-  wireFieldConfigSchemeToProjects_(fieldConfigSchemeId, projects);
+  Logger.log('========== SANTHOSHOS JIRA SETUP 3.0 ==========');
+  setupStatuses();
+  const workflowName = setupWorkFlows();
+  const workflowSchemeId = setupWorkflowSchemes(workflowName);
+  const categoryFieldId = populateCategory();
+  const screenInfo = setupScreens(categoryFieldId);
+  const screenSchemeId = setupScreenSchemes(screenInfo.screenId);
+  const issueTypeScreenSchemeId = setupWorkTypeScreenSchemes(screenSchemeId);
+  setupWorkTypes();
+  const workTypeSchemeId = setupWorkTypeSchema();
+  setupPriorities();
+
+  const project = createProject(workflowSchemeId, issueTypeScreenSchemeId, workTypeSchemeId);
+  if (project) {
+    populateComponent(project.key);
+    wireSchemeToProject_('/rest/api/3/workflowscheme/project', 'workflowSchemeId', workflowSchemeId, project.id);
+    wireSchemeToProject_('/rest/api/3/issuetypescreenscheme/project', 'issueTypeScreenSchemeId', issueTypeScreenSchemeId, project.id);
+  }
+
   Logger.log('========== DONE ==========');
-  Logger.log('Manual follow-up needed:');
-  Logger.log('  1. Check Settings → Issues → Statuses for duplicate New/Planned/etc.');
-  Logger.log('     (see workflow creation caveat in comments) — clean up manually if so.');
-  Logger.log('  2. Verify "Atlassian Projects" section appears on a Workstream —');
-  Logger.log('     this is UNCONFIRMED and the main thing to test before building further.');
-  Logger.log('  3. Optionally install a status-color marketplace app for 5 distinct colors.');
+  Logger.log('Manual follow-up:');
+  Logger.log('  1. Check Board Settings → Columns — if still "Simplified workflow", switch it off manually.');
+  Logger.log('  2. Category field created with 14 options — Component sync happens in JIRA_update_Scheduled.gs, not here.');
+  Logger.log('  3. Check Settings → Issues → Statuses for any duplicates from workflow creation.');
 }
 
-// ==================== PHASE 8: FIELD CONFIGURATION (hide Assignee/Reporter) ====================
-// This is a DIFFERENT mechanism from Screens: Screens control which
-// fields exist on the create/edit/view form at all. Field Configuration
-// controls per-field behavior (required/optional/hidden) — this is the
-// correct place to hide Assignee and Reporter from the Details panel,
-// since Screens alone can't fully suppress them.
+// ==================== COMPONENTS (native, 4 top-level) ====================
 
-const FIELD_CONFIG_NAME = 'santhoshOS Field Configuration';
-const FIELD_CONFIG_SCHEME_NAME = 'santhoshOS Field Configuration Scheme';
-const FIELDS_TO_HIDE = ['assignee', 'reporter'];
+function populateComponent(projectKey) {
+  Logger.log('--- populateComponent() ---');
+  const key = projectKey || PROJECT_KEY;
+  const existing = jiraRequest_('GET', '/rest/api/3/project/' + key + '/components') || [];
+  COMPONENTS.forEach(function (name) {
+    if (existing.find(function (c) { return c.name === name; })) { Logger.log('⏭️  Component "' + name + '" already exists — skipping.'); return; }
+    const result = jiraRequest_('POST', '/rest/api/3/component', { name: name, project: key });
+    if (result) Logger.log('✅ Created component: ' + name);
+    else Logger.log('❌ Failed to create component: ' + name);
+  });
+}
 
-function createFieldConfiguration() {
-  Logger.log('--- Phase 8: Field Configuration (hide Assignee/Reporter) ---');
+// ==================== CATEGORY (custom field, 14 granular values) ====================
 
-  let fieldConfig = findByName_('/rest/api/3/fieldconfiguration?maxResults=100', 'values', FIELD_CONFIG_NAME);
-  if (!fieldConfig) {
-    fieldConfig = jiraRequest_('POST', '/rest/api/3/fieldconfiguration', {
-      name: FIELD_CONFIG_NAME, description: 'Hides Assignee and Reporter across all santhoshOS Spaces',
+function populateCategory() {
+  Logger.log('--- populateCategory() ---');
+  const existingFields = jiraRequest_('GET', '/rest/api/3/field') || [];
+  let field = existingFields.find(function (f) { return f.name === CATEGORY_FIELD_NAME; });
+
+  if (!field) {
+    field = jiraRequest_('POST', '/rest/api/3/field', {
+      name: CATEGORY_FIELD_NAME,
+      description: 'Granular sub-area — manually set. Component is auto-derived from this via JIRA_update_Scheduled.gs',
+      type: 'com.atlassian.jira.plugin.system.customfieldtypes:select',
+      searcherKey: 'com.atlassian.jira.plugin.system.customfieldtypes:selectsearcher',
     });
-    if (fieldConfig) Logger.log('✅ Created field configuration: ' + FIELD_CONFIG_NAME);
+    if (field) Logger.log('✅ Created field: ' + CATEGORY_FIELD_NAME);
+    else { Logger.log('❌ Failed to create Category field.'); return null; }
   } else {
-    Logger.log('⏭️  Field configuration already exists — skipping creation.');
+    Logger.log('⏭️  Field "' + CATEGORY_FIELD_NAME + '" already exists — skipping creation.');
   }
-  if (!fieldConfig || !fieldConfig.id) { Logger.log('❌ No field configuration — aborting phase.'); return; }
 
-  const hideResult = jiraRequest_('PUT', '/rest/api/3/fieldconfiguration/' + fieldConfig.id + '/fields', {
-    fieldConfigurationItems: FIELDS_TO_HIDE.map(function (id) { return { fieldId: id, isHidden: true }; }),
-  });
-  Logger.log((hideResult !== null ? '✅' : '❌') + ' Set Assignee + Reporter to hidden.');
+  const contexts = jiraRequest_('GET', '/rest/api/3/field/' + field.id + '/context');
+  const contextId = contexts && contexts.values && contexts.values[0] ? contexts.values[0].id : null;
+  if (!contextId) { Logger.log('❌ No context found for Category field — options not added.'); return field.id; }
 
-  let scheme = findByName_('/rest/api/3/fieldconfigurationscheme?maxResults=100', 'values', FIELD_CONFIG_SCHEME_NAME);
-  if (!scheme) {
-    scheme = jiraRequest_('POST', '/rest/api/3/fieldconfigurationscheme', { name: FIELD_CONFIG_SCHEME_NAME });
-    if (scheme) Logger.log('✅ Created field configuration scheme: ' + FIELD_CONFIG_SCHEME_NAME);
+  const existingOptions = jiraRequest_('GET', '/rest/api/3/field/' + field.id + '/context/' + contextId + '/option');
+  const existingValues = existingOptions && existingOptions.values ? existingOptions.values.map(function (o) { return o.value; }) : [];
+  const toAdd = CATEGORY_OPTIONS.filter(function (o) { return existingValues.indexOf(o) === -1; });
+
+  if (toAdd.length > 0) {
+    const result = jiraRequest_('POST', '/rest/api/3/field/' + field.id + '/context/' + contextId + '/option', {
+      options: toAdd.map(function (v) { return { value: v }; }),
+    });
+    if (result) Logger.log('✅ Added ' + toAdd.length + ' Category options.');
   } else {
-    Logger.log('⏭️  Field configuration scheme already exists — skipping creation.');
+    Logger.log('⏭️  All Category options already present.');
   }
-  if (!scheme || !scheme.id) { Logger.log('❌ No scheme — aborting phase.'); return; }
 
-  jiraRequest_('PUT', '/rest/api/3/fieldconfigurationscheme/' + scheme.id + '/mapping', {
-    mappings: [{ issueTypeId: 'default', fieldConfigurationId: fieldConfig.id }],
-  });
-
-  return scheme.id;
+  return field.id;
 }
 
-function wireFieldConfigSchemeToProjects_(schemeId, projects) {
-  if (!schemeId) return;
-  projects.forEach(function (p) {
-    const res = UrlFetchApp.fetch(getSiteUrl_() + '/rest/api/3/fieldconfigurationscheme/project', {
-      method: 'put',
-      headers: { 'Authorization': getAuthHeader_(), 'Content-Type': 'application/json' },
-      payload: JSON.stringify({ fieldConfigurationSchemeId: schemeId, projectId: p.id }),
-      muteHttpExceptions: true,
-    });
-    Logger.log((res.getResponseCode() < 300 ? '✅' : '❌') + ' Field config scheme → ' + p.key);
-  });
-}
+// ==================== STATUSES ====================
 
-// ==================== PHASE 0: DELETE REDUNDANT CUSTOM FIELDS ====================
-// Removes any custom fields this pipeline previously created that turned
-// out to duplicate a native/locked Jira field (Start Date/Time, End
-// Date/Time — superseded by native "Start date" and "duedate"). Safe to
-// re-run: does nothing if they're already gone.
-
-function deleteRedundantCustomFields() {
-  Logger.log('--- Phase 0: Delete Redundant Custom Fields ---');
-  const allFields = jiraRequest_('GET', '/rest/api/3/field') || [];
-  REDUNDANT_FIELD_NAMES.forEach(function (name) {
-    const f = allFields.find(function (x) { return x.name === name; });
-    if (!f) {
-      Logger.log('⏭️  "' + name + '" not present — nothing to delete.');
-      return;
-    }
-    const res = UrlFetchApp.fetch(getSiteUrl_() + '/rest/api/3/field/' + f.id, {
-      method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true,
-    });
-    Logger.log((res.getResponseCode() < 300 ? '🗑️  Deleted redundant field: ' : '❌ Failed to delete: ') + name);
-  });
-}
-
-// ==================== PHASE 1: STATUSES ====================
-
-function createStatuses() {
-  Logger.log('--- Phase 1: Statuses ---');
+function setupStatuses() {
+  Logger.log('--- setupStatuses() ---');
   const existing = jiraRequest_('GET', '/rest/api/3/statuses/search?maxResults=200');
   const existingNames = existing && existing.values ? existing.values.map(function (s) { return s.name; }) : [];
-
   const toCreate = STATUS_CONFIG.filter(function (s) { return existingNames.indexOf(s.name) === -1; });
-  const results = [];
 
   if (toCreate.length > 0) {
-    const payload = {
+    const result = jiraRequest_('POST', '/rest/api/3/statuses', {
       scope: { type: 'GLOBAL' },
-      statuses: toCreate.map(function (s) {
-        return { name: s.name, statusCategory: s.category, description: '' };
-      }),
-    };
-    const created = jiraRequest_('POST', '/rest/api/3/statuses', payload);
-    if (created) {
-      created.forEach(function (s) { Logger.log('✅ Created status: ' + s.name); });
-      results.push.apply(results, created);
-    } else {
-      Logger.log('❌ Status creation failed — see error above. You may need to create these 5 statuses manually (Settings → Issues → Statuses) and re-run createWorkflow() only.');
-    }
+      statuses: toCreate.map(function (s) { return { name: s.name, statusCategory: s.category, description: '' }; }),
+    });
+    if (result) result.forEach(function (s) { Logger.log('✅ Created status: ' + s.name); });
+    else Logger.log('❌ Status creation failed.');
   }
-
   STATUS_CONFIG.forEach(function (s) {
     if (existingNames.indexOf(s.name) !== -1) Logger.log('⏭️  Status "' + s.name + '" already exists — skipping.');
   });
-
-  return STATUS_CONFIG; // downstream steps reference by name; workflow API resolves names to IDs
 }
 
-// ==================== PHASE 2: WORKFLOW ====================
-// NOTE: this endpoint's JSON shape is the least stable part of the Jira
-// API. If this call fails, check the logged error body first — Jira's
-// message usually tells you exactly which field name it expected.
+// ==================== WORKFLOW + SCHEME ====================
 
-function createWorkflow(statuses) {
-  Logger.log('--- Phase 2: Workflow ---');
+function setupWorkFlows() {
+  Logger.log('--- setupWorkFlows() ---');
   const existing = jiraRequest_('GET', '/rest/api/3/workflows/search?workflowName=' + encodeURIComponent(WORKFLOW_NAME));
-  Logger.log('  (debug) workflow search raw: ' + JSON.stringify(existing));
-  const exactMatch = existing && existing.values ? existing.values.find(function (w) {
-    return w.id && w.id.name === WORKFLOW_NAME;
-  }) : null;
-  if (exactMatch) {
-    Logger.log('⏭️  Workflow "' + WORKFLOW_NAME + '" already exists — skipping.');
-    return WORKFLOW_NAME;
-  }
+  const exactMatch = existing && existing.values ? existing.values.find(function (w) { return w.id && w.id.name === WORKFLOW_NAME; }) : null;
+  if (exactMatch) { Logger.log('⏭️  Workflow already exists — skipping.'); return WORKFLOW_NAME; }
 
   const statusRefs = STATUS_CONFIG.map(function () { return Utilities.getUuid(); });
   const payload = {
@@ -397,24 +275,14 @@ function createWorkflow(statuses) {
     }),
     workflows: [{
       name: WORKFLOW_NAME,
-      description: 'Shared workflow across all santhoshOS Spaces',
-      statuses: STATUS_CONFIG.map(function (s, i) {
-        return { statusReference: statusRefs[i], properties: {} };
-      }),
-      // All-to-all transitions for maximum flexibility (no rigid gating)
+      description: 'Single shared workflow across all santhoshOS work types',
+      statuses: STATUS_CONFIG.map(function (s, i) { return { statusReference: statusRefs[i], properties: {} }; }),
       transitions: (function () {
-        const t = [];
-        let transitionId = 1;
-        STATUS_CONFIG.forEach(function (fromStatus, i) {
-          STATUS_CONFIG.forEach(function (toStatus, j) {
+        const t = []; let id = 1;
+        STATUS_CONFIG.forEach(function (from, i) {
+          STATUS_CONFIG.forEach(function (to, j) {
             if (i === j) return;
-            t.push({
-              id: String(transitionId++),
-              name: 'To ' + toStatus.name,
-              to: statusRefs[j],
-              from: [statusRefs[i]],
-              type: 'DIRECTED',
-            });
+            t.push({ id: String(id++), name: 'To ' + to.name, to: statusRefs[j], from: [statusRefs[i]], type: 'DIRECTED' });
           });
         });
         return t;
@@ -423,334 +291,238 @@ function createWorkflow(statuses) {
   };
 
   const result = jiraRequest_('POST', '/rest/api/3/workflows/create', payload);
-  if (result) {
-    Logger.log('✅ Created workflow: ' + WORKFLOW_NAME);
-    return WORKFLOW_NAME;
-  } else {
-    Logger.log('❌ Workflow creation failed. Fallback: create "' + WORKFLOW_NAME + '" manually in the UI (Settings → Issues → Workflows) with the 5 statuses above, all-to-all transitions, then re-run createWorkflowScheme() and later phases.');
-    return WORKFLOW_NAME; // proceed optimistically; downstream calls will fail loudly if it truly doesn't exist
-  }
+  if (result) Logger.log('✅ Created workflow: ' + WORKFLOW_NAME);
+  else Logger.log('❌ Workflow creation failed.');
+  return WORKFLOW_NAME;
 }
 
-function createWorkflowScheme(workflowName) {
-  const existing = jiraRequest_('GET', '/rest/api/3/workflowscheme?maxResults=100');
-  const found = existing && existing.values ? existing.values.find(function (w) { return w.name === WORKFLOW_SCHEME_NAME; }) : null;
-  if (found) {
-    Logger.log('⏭️  Workflow scheme already exists — skipping.');
-    return found.id;
-  }
-  const payload = { name: WORKFLOW_SCHEME_NAME, description: 'santhoshOS shared workflow scheme', defaultWorkflow: workflowName };
-  const result = jiraRequest_('POST', '/rest/api/3/workflowscheme', payload);
-  if (result && result.id) {
-    Logger.log('✅ Created workflow scheme: ' + WORKFLOW_SCHEME_NAME);
-    return result.id;
-  }
-  Logger.log('❌ Workflow scheme creation failed.');
-  return null;
+function setupWorkflowSchemes(workflowName) {
+  Logger.log('--- setupWorkflowSchemes() ---');
+  const existing = findByName_('/rest/api/3/workflowscheme?maxResults=100', 'values', WORKFLOW_SCHEME_NAME);
+  if (existing) { Logger.log('⏭️  Workflow scheme already exists — skipping.'); return existing.id; }
+  const result = jiraRequest_('POST', '/rest/api/3/workflowscheme', {
+    name: WORKFLOW_SCHEME_NAME, description: 'santhoshOS shared workflow scheme', defaultWorkflow: workflowName,
+  });
+  if (result) Logger.log('✅ Created workflow scheme: ' + WORKFLOW_SCHEME_NAME);
+  return result ? result.id : null;
 }
 
-// ==================== PHASE 3: CUSTOM FIELDS ====================
+// ==================== WORK TYPES + SCHEMA (hierarchy control) ====================
 
-function createCustomFields() {
-  Logger.log('--- Phase 3: Custom Fields ---');
-  const existingFields = jiraRequest_('GET', '/rest/api/3/field') || [];
-  const fieldIds = {}; // name -> id, plus tab grouping
+function setupWorkTypes() {
+  Logger.log('--- setupWorkTypes() ---');
+  const allTypes = jiraRequest_('GET', '/rest/api/3/issuetype') || [];
+  ALLOWED_WORK_TYPES.forEach(function (name) {
+    const t = allTypes.find(function (x) { return x.name === name; });
+    Logger.log((t ? '⏭️  ' : '⚠️ ') + name + (t ? ' exists (Jira default, hierarchyLevel ' + t.hierarchyLevel + ')' : ' NOT FOUND by name — check spelling'));
+  });
+}
 
-  CUSTOM_FIELD_CONFIG.forEach(function (cfg) {
-    const existing = existingFields.find(function (f) { return f.name === cfg.name; });
-    if (existing) {
-      Logger.log('⏭️  Field "' + cfg.name + '" already exists — skipping.');
-      fieldIds[cfg.name] = { id: existing.id, tab: cfg.tab };
-      return;
-    }
-    const payload = { name: cfg.name, description: '', type: cfg.type, searcherKey: cfg.searcher };
-    const result = jiraRequest_('POST', '/rest/api/3/field', payload);
-    if (result && result.id) {
-      Logger.log('✅ Created field: ' + cfg.name + ' (' + result.id + ')');
-      fieldIds[cfg.name] = { id: result.id, tab: cfg.tab };
-    } else {
-      Logger.log('❌ Failed to create field: ' + cfg.name);
-    }
+function setupWorkTypeSchema() {
+  Logger.log('--- setupWorkTypeSchema() ---');
+  const allTypes = jiraRequest_('GET', '/rest/api/3/issuetype') || [];
+  const allowedIds = ALLOWED_WORK_TYPES.map(function (name) {
+    const t = allTypes.find(function (x) { return x.name === name; });
+    return t ? t.id : null;
+  }).filter(function (id) { return id; });
+  const taskType = allTypes.find(function (t) { return t.name === 'Task'; });
+
+  let scheme = findByName_('/rest/api/3/issuetypescheme/search?maxResults=100', 'values', WORK_TYPE_SCHEME_NAME);
+  if (scheme) { Logger.log('⏭️  Work type scheme already exists — skipping.'); return scheme.id; }
+
+  const result = jiraRequest_('POST', '/rest/api/3/issuetypescheme', {
+    name: WORK_TYPE_SCHEME_NAME,
+    description: 'Epic, Task, Sub-task only — Story and Bug excluded (this is what disables them)',
+    issueTypeIds: allowedIds,
+    defaultIssueTypeId: taskType ? taskType.id : undefined,
+  });
+  if (result) Logger.log('✅ Created work type scheme: ' + WORK_TYPE_SCHEME_NAME);
+  return result ? (result.issueTypeSchemeId || result.id) : null;
+}
+
+// ==================== PRIORITIES (combined with scheme, per instruction) ====================
+
+function setupPriorities() {
+  Logger.log('--- setupPriorities() (combined with scheme) ---');
+  const existing = jiraRequest_('GET', '/rest/api/3/priority') || [];
+  const existingNames = existing.map(function (p) { return p.name; });
+
+  PRIORITY_CONFIG.forEach(function (name) {
+    if (existingNames.indexOf(name) !== -1) { Logger.log('⏭️  Priority "' + name + '" already exists — skipping.'); return; }
+    const result = jiraRequest_('POST', '/rest/api/3/priority', { name: name, description: '', iconUrl: 'https://cdn.prod.website-files.com/6258e1e2f74a2d178f31af0c/652890889c6ceb254e6b6da2_icon-priority-medium.svg' });
+    if (result) Logger.log('✅ Created priority: ' + name);
+    else Logger.log('❌ Failed to create priority: ' + name);
   });
 
-  return fieldIds;
+  // Remove Jira's original defaults so only our 4 remain available
+  const stillDefault = jiraRequest_('GET', '/rest/api/3/priority') || [];
+  const toRemove = stillDefault.filter(function (p) { return PRIORITY_CONFIG.indexOf(p.name) === -1; });
+  toRemove.forEach(function (p) {
+    const res = UrlFetchApp.fetch(getSiteUrl_() + '/rest/api/3/priority/' + p.id, {
+      method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true,
+    });
+    Logger.log((res.getResponseCode() < 300 ? '🗑️  Removed default priority: ' : '❌ Could not remove (may be in use): ') + p.name);
+  });
+
+  // Set default priority
+  const finalList = jiraRequest_('GET', '/rest/api/3/priority') || [];
+  const normal = finalList.find(function (p) { return p.name === DEFAULT_PRIORITY_NAME; });
+  if (normal) {
+    jiraRequest_('PUT', '/rest/api/3/priority/default', { id: normal.id });
+    Logger.log('✅ Set default priority: ' + DEFAULT_PRIORITY_NAME);
+  }
 }
 
-// ==================== PHASE 4: SCREEN + TABS ====================
+// ==================== SCREEN / SCREEN SCHEME / WORK TYPE SCREEN SCHEME ====================
 
-function createScreenAndTabs(customFieldIds) {
-  Logger.log('--- Phase 4: Screen & Tabs ---');
+function setupScreens(categoryFieldId) {
+  Logger.log('--- setupScreens() ---');
   const existingScreens = jiraRequest_('GET', '/rest/api/3/screens?maxResults=100');
   let screen = existingScreens && existingScreens.values ? existingScreens.values.find(function (s) { return s.name === SCREEN_NAME; }) : null;
-
   if (!screen) {
     screen = jiraRequest_('POST', '/rest/api/3/screens', { name: SCREEN_NAME, description: 'santhoshOS work item fields' });
     if (screen) Logger.log('✅ Created screen: ' + SCREEN_NAME);
   } else {
-    Logger.log('⏭️  Screen already exists — skipping creation.');
+    Logger.log('⏭️  Screen already exists — skipping.');
   }
-  if (!screen || !screen.id) {
-    Logger.log('❌ No screen available — aborting screen phase.');
-    return {};
-  }
+  if (!screen || !screen.id) return {};
 
   const tabNames = { default: 'Default Properties', space: 'Space Properties', relational: 'Relational Properties' };
   const existingTabs = jiraRequest_('GET', '/rest/api/3/screens/' + screen.id + '/tabs') || [];
   const tabIds = {};
-
   Object.keys(tabNames).forEach(function (key) {
     let tab = existingTabs.find(function (t) { return t.name === tabNames[key]; });
-    if (!tab) {
-      tab = jiraRequest_('POST', '/rest/api/3/screens/' + screen.id + '/tabs', { name: tabNames[key] });
-      if (tab) Logger.log('✅ Created tab: ' + tabNames[key]);
-    } else {
-      Logger.log('⏭️  Tab "' + tabNames[key] + '" already exists — skipping.');
-    }
+    if (!tab) { tab = jiraRequest_('POST', '/rest/api/3/screens/' + screen.id + '/tabs', { name: tabNames[key] }); if (tab) Logger.log('✅ Created tab: ' + tabNames[key]); }
+    else Logger.log('⏭️  Tab "' + tabNames[key] + '" already exists — skipping.');
     if (tab) tabIds[key] = tab.id;
   });
 
-  // Add system fields to their tabs
-  SYSTEM_FIELD_TABS.forEach(function (sf) {
-    addFieldToTab_(screen.id, tabIds[sf.tab], sf.fieldId);
-  });
-
-  // Add custom fields to their tabs
-  Object.keys(customFieldIds).forEach(function (name) {
-    const f = customFieldIds[name];
-    addFieldToTab_(screen.id, tabIds[f.tab], f.id);
-  });
-
-  // "Start date" — locked, auto-provisioned field, not a fixed system key; resolve by name
+  SYSTEM_FIELD_TABS.forEach(function (sf) { addFieldToTab_(screen.id, tabIds[sf.tab], sf.fieldId); });
+  if (categoryFieldId) addFieldToTab_(screen.id, tabIds.default, categoryFieldId);
   wireNativeStartDateField_(screen.id, tabIds);
-
-  // Epic Name — auto-provisioned by the software template once an Epic
-  // exists on the site; wire to both Default and Relational tabs
   wireEpicNameField_(screen.id, tabIds);
 
   return { screenId: screen.id, tabIds: tabIds };
 }
 
-function wireEpicNameField_(screenId, tabIds) {
-  const allFields = jiraRequest_('GET', '/rest/api/3/field') || [];
-  const epicNameField = allFields.find(function (f) { return f.name === 'Epic Name'; });
-  if (!epicNameField) {
-    Logger.log('⚠️ "Epic Name" field not found yet — it\'s usually auto-created the first time an Epic exists in a project. Re-run createScreenAndTabs() after creating one Epic if it\'s missing.');
-    return;
-  }
-  addFieldToTab_(screenId, tabIds.default, epicNameField.id);
-  addFieldToTab_(screenId, tabIds.relational, epicNameField.id);
-}
-
-function wireNativeStartDateField_(screenId, tabIds) {
-  const allFields = jiraRequest_('GET', '/rest/api/3/field') || [];
-  const startDateField = allFields.find(function (f) { return f.name === 'Start date'; });
-  if (!startDateField) {
-    Logger.log('⚠️ Native "Start date" field not found by name — check spelling/casing on your site, or add it to the tab manually.');
-    return;
-  }
-  addFieldToTab_(screenId, tabIds.default, startDateField.id);
-}
-
 function addFieldToTab_(screenId, tabId, fieldId) {
   if (!screenId || !tabId || !fieldId) return;
   const existingFields = jiraRequest_('GET', '/rest/api/3/screens/' + screenId + '/tabs/' + tabId + '/fields') || [];
-  if (existingFields.find(function (f) { return f.id === fieldId; })) {
-    Logger.log('⏭️  Field ' + fieldId + ' already on tab — skipping.');
-    return;
-  }
+  if (existingFields.find(function (f) { return f.id === fieldId; })) { Logger.log('⏭️  Field ' + fieldId + ' already on tab — skipping.'); return; }
   const result = jiraRequest_('POST', '/rest/api/3/screens/' + screenId + '/tabs/' + tabId + '/fields', { fieldId: fieldId });
   if (result) Logger.log('✅ Added ' + fieldId + ' to tab ' + tabId);
 }
 
-// ==================== PHASE 5: SCREEN SCHEME + ISSUE TYPE SCREEN SCHEME ====================
+function wireNativeStartDateField_(screenId, tabIds) {
+  const allFields = jiraRequest_('GET', '/rest/api/3/field') || [];
+  const f = allFields.find(function (x) { return x.name === 'Start date'; });
+  if (f) addFieldToTab_(screenId, tabIds.default, f.id);
+  else Logger.log('⚠️ Native "Start date" field not found by name.');
+}
 
-function createIssueTypeScreenScheme(screenId) {
-  Logger.log('--- Phase 5: Screen Scheme & Issue Type Screen Scheme ---');
-  if (!screenId) { Logger.log('❌ No screenId — skipping.'); return null; }
+function wireEpicNameField_(screenId, tabIds) {
+  const allFields = jiraRequest_('GET', '/rest/api/3/field') || [];
+  const f = allFields.find(function (x) { return x.name === 'Epic Name'; });
+  if (f) { addFieldToTab_(screenId, tabIds.default, f.id); addFieldToTab_(screenId, tabIds.relational, f.id); }
+  else Logger.log('⚠️ "Epic Name" not found yet — appears once an Epic exists. Re-run setupScreens() after creating one.');
+}
 
-  let screenScheme = findByName_('/rest/api/3/screenscheme?maxResults=100', 'values', SCREEN_SCHEME_NAME);
-  if (!screenScheme) {
-    screenScheme = jiraRequest_('POST', '/rest/api/3/screenscheme', {
-      name: SCREEN_SCHEME_NAME,
-      screens: { default: screenId },
-    });
-    if (screenScheme) Logger.log('✅ Created screen scheme: ' + SCREEN_SCHEME_NAME);
+function setupScreenSchemes(screenId) {
+  Logger.log('--- setupScreenSchemes() ---');
+  if (!screenId) return null;
+  let scheme = findByName_('/rest/api/3/screenscheme?maxResults=100', 'values', SCREEN_SCHEME_NAME);
+  if (!scheme) {
+    scheme = jiraRequest_('POST', '/rest/api/3/screenscheme', { name: SCREEN_SCHEME_NAME, screens: { default: screenId } });
+    if (scheme) Logger.log('✅ Created screen scheme: ' + SCREEN_SCHEME_NAME);
   } else {
     Logger.log('⏭️  Screen scheme already exists — skipping.');
   }
-  if (!screenScheme || !screenScheme.id) { Logger.log('❌ Screen scheme unavailable.'); return null; }
+  return scheme ? scheme.id : null;
+}
 
+function setupWorkTypeScreenSchemes(screenSchemeId) {
+  Logger.log('--- setupWorkTypeScreenSchemes() ---');
+  if (!screenSchemeId) return null;
   let itss = findByName_('/rest/api/3/issuetypescreenscheme?maxResults=100', 'values', ISSUE_TYPE_SCREEN_SCHEME_NAME);
   if (!itss) {
     itss = jiraRequest_('POST', '/rest/api/3/issuetypescreenscheme', {
-      name: ISSUE_TYPE_SCREEN_SCHEME_NAME,
-      issueTypeMappings: [{ issueTypeId: 'default', screenSchemeId: screenScheme.id }],
+      name: ISSUE_TYPE_SCREEN_SCHEME_NAME, issueTypeMappings: [{ issueTypeId: 'default', screenSchemeId: screenSchemeId }],
     });
-    if (itss) Logger.log('✅ Created issue type screen scheme: ' + ISSUE_TYPE_SCREEN_SCHEME_NAME);
+    if (itss) Logger.log('✅ Created work type screen scheme: ' + ISSUE_TYPE_SCREEN_SCHEME_NAME);
   } else {
-    Logger.log('⏭️  Issue type screen scheme already exists — skipping.');
+    Logger.log('⏭️  Work type screen scheme already exists — skipping.');
   }
   return itss ? itss.id : null;
 }
 
-function findByName_(path, listKey, name) {
-  const res = jiraRequest_('GET', path);
-  const list = res && res[listKey] ? res[listKey] : (Array.isArray(res) ? res : []);
-  return list.find(function (item) { return item.name === name; }) || null;
-}
+// ==================== PROJECT ====================
 
-// ==================== PHASE 6: PROJECTS + COMPONENTS ====================
-
-function createProjectsAndComponents() {
-  Logger.log('--- Phase 6: Projects & Components ---');
+function createProject(workflowSchemeId, issueTypeScreenSchemeId, issueTypeSchemeId) {
+  Logger.log('--- createProject() ---');
   const accountId = getMyAccountId_();
-  const created = [];
+  let project = jiraRequest_('GET', '/rest/api/3/project/' + PROJECT_KEY);
+  if (project) { Logger.log('⏭️  Project ' + PROJECT_KEY + ' already exists — skipping.'); return project; }
 
-  SPACE_CONFIG.forEach(function (space) {
-    let project = jiraRequest_('GET', '/rest/api/3/project/' + space.key);
-    if (!project) {
-      project = jiraRequest_('POST', '/rest/api/3/project', {
-        key: space.key,
-        name: space.name,
-        projectTypeKey: PROJECT_TYPE_KEY,
-        projectTemplateKey: PROJECT_TEMPLATE_KEY,
-        leadAccountId: accountId,
-      });
-      if (project) Logger.log('✅ Created project: ' + space.key + ' — ' + space.name);
-    } else {
-      Logger.log('⏭️  Project ' + space.key + ' already exists — skipping creation.');
-    }
-    if (!project) { Logger.log('❌ Failed to create/find ' + space.key); return; }
+  const payload = {
+    key: PROJECT_KEY, name: PROJECT_NAME, projectTypeKey: PROJECT_TYPE_KEY,
+    projectTemplateKey: PROJECT_TEMPLATE_KEY, leadAccountId: accountId,
+  };
+  if (workflowSchemeId) payload.workflowSchemeId = workflowSchemeId;
+  if (issueTypeScreenSchemeId) payload.issueTypeScreenSchemeId = issueTypeScreenSchemeId;
+  if (issueTypeSchemeId) payload.issueTypeSchemeId = issueTypeSchemeId;
 
-    const existingComponents = jiraRequest_('GET', '/rest/api/3/project/' + space.key + '/components') || [];
-    space.components.forEach(function (compName) {
-      if (existingComponents.find(function (c) { return c.name === compName; })) {
-        Logger.log('⏭️  Component "' + compName + '" already exists in ' + space.key + ' — skipping.');
-        return;
-      }
-      const comp = jiraRequest_('POST', '/rest/api/3/component', { name: compName, project: space.key });
-      if (comp) Logger.log('✅ Created component "' + compName + '" in ' + space.key);
-    });
-
-    created.push({ key: space.key, id: project.id });
-  });
-
-  return created;
+  project = jiraRequest_('POST', '/rest/api/3/project', payload);
+  if (project) Logger.log('✅ Created project: ' + PROJECT_KEY);
+  else Logger.log('❌ Failed to create project.');
+  return project;
 }
 
-// ==================== PHASE 7: WIRE SCHEMES TO PROJECTS ====================
-
-function wireSchemesToProjects(projects, workflowSchemeId, issueTypeScreenSchemeId) {
-  Logger.log('--- Phase 7: Wire Schemes to Projects ---');
-  projects.forEach(function (p) {
-    if (workflowSchemeId) {
-      const res = jiraRequest_('PUT', '/rest/api/3/workflowscheme/project', { workflowSchemeId: workflowSchemeId, projectId: p.id });
-      Logger.log((res !== null ? '✅' : '❌') + ' Workflow scheme → ' + p.key);
-    }
-    if (issueTypeScreenSchemeId) {
-      const res = jiraRequest_('PUT', '/rest/api/3/issuetypescreenscheme/project', { issueTypeScreenSchemeId: issueTypeScreenSchemeId, projectId: p.id });
-      Logger.log((res !== null ? '✅' : '❌') + ' Issue type screen scheme → ' + p.key);
-    }
+function wireSchemeToProject_(path, bodyKey, schemeId, projectId) {
+  if (!schemeId || !projectId) return;
+  const body = {}; body[bodyKey] = schemeId; body.projectId = projectId;
+  const res = UrlFetchApp.fetch(getSiteUrl_() + path, {
+    method: 'put', headers: { 'Authorization': getAuthHeader_(), 'Content-Type': 'application/json' },
+    payload: JSON.stringify(body), muteHttpExceptions: true,
   });
+  Logger.log((res.getResponseCode() < 300 ? '✅' : '❌') + ' ' + path);
 }
 
-// ==================== VERIFICATION ====================
-// Confirms each of the 4 projects is actually wired to the shared
-// santhoshOS schemes, not an auto-generated per-project one Jira
-// silently creates at project-creation time (Jira does this on its
-// own as a side effect of the project template — not something this
-// script triggers, but worth verifying it got overridden correctly).
-
-function verifyProjectSchemeAssociations() {
-  Logger.log('=== Verifying project scheme associations ===');
-
-  const expectedITSS = findByName_('/rest/api/3/issuetypescreenscheme?maxResults=100', 'values', ISSUE_TYPE_SCREEN_SCHEME_NAME);
-  const expectedWFS = findByName_('/rest/api/3/workflowscheme?maxResults=100', 'values', WORKFLOW_SCHEME_NAME);
-
-  if (!expectedITSS) Logger.log('⚠️ Could not find expected issue type screen scheme "' + ISSUE_TYPE_SCREEN_SCHEME_NAME + '" — is it still named the same?');
-  if (!expectedWFS) Logger.log('⚠️ Could not find expected workflow scheme "' + WORKFLOW_SCHEME_NAME + '" — is it still named the same?');
-
-  SPACE_CONFIG.forEach(function (space) {
-    const project = jiraRequest_('GET', '/rest/api/3/project/' + space.key);
-    if (!project) { Logger.log('❌ ' + space.key + ': project not found.'); return; }
-
-    if (expectedITSS) {
-      const itssRes = jiraRequest_('GET', '/rest/api/3/issuetypescreenscheme/project?projectId=' + project.id);
-      const actual = itssRes && itssRes.values && itssRes.values[0] ? itssRes.values[0].issueTypeScreenSchemeId : null;
-      const ok = actual === expectedITSS.id;
-      Logger.log((ok ? '✅' : '❌') + ' ' + space.key + ' issue type screen scheme: ' +
-        (ok ? 'correct (shared)' : 'MISMATCH — using scheme ID ' + actual + ', expected ' + expectedITSS.id));
-    }
-
-    if (expectedWFS) {
-      const wfsRes = jiraRequest_('GET', '/rest/api/3/workflowscheme/project?projectId=' + project.id);
-      const actual = wfsRes && wfsRes.values && wfsRes.values[0] ? wfsRes.values[0].workflowSchemeId : null;
-      const ok = actual === expectedWFS.id;
-      Logger.log((ok ? '✅' : '❌') + ' ' + space.key + ' workflow scheme: ' +
-        (ok ? 'correct (shared)' : 'MISMATCH — using scheme ID ' + actual + ', expected ' + expectedWFS.id));
-    }
-  });
-
-  Logger.log('=== Verification complete ===');
-}
-
-// ==================== GLOBAL FACTORY RESET ====================
-// Per your instruction: no dry run. Deletes ALL projects on the site,
-// plus the custom fields, screen, screen scheme, issue type screen
-// scheme, workflow scheme, and workflow this script creates.
-// Run once, then delete this function as planned.
+// ==================== FACTORY RESET ====================
 
 function factoryResetJira() {
-  Logger.log('========== ⚠️ FACTORY RESET — DELETING EVERYTHING ==========');
-
-  // 1. Delete all projects
+  Logger.log('========== ⚠️ FACTORY RESET ==========');
   const projects = jiraRequest_('GET', '/rest/api/3/project/search?maxResults=200');
   if (projects && projects.values) {
     projects.values.forEach(function (p) {
-      const res = UrlFetchApp.fetch(getSiteUrl_() + '/rest/api/3/project/' + p.key, {
-        method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true,
-      });
+      const res = UrlFetchApp.fetch(getSiteUrl_() + '/rest/api/3/project/' + p.key, { method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true });
       Logger.log((res.getResponseCode() < 300 ? '🗑️  Deleted project ' : '❌ Failed to delete ') + p.key);
     });
   }
 
-  // 2. Delete our custom fields
   const allFields = jiraRequest_('GET', '/rest/api/3/field') || [];
-  CUSTOM_FIELD_CONFIG.forEach(function (cfg) {
-    const f = allFields.find(function (x) { return x.name === cfg.name; });
-    if (!f) return;
-    const res = UrlFetchApp.fetch(getSiteUrl_() + '/rest/api/3/field/' + f.id, {
-      method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true,
-    });
-    Logger.log((res.getResponseCode() < 300 ? '🗑️  Deleted field ' : '❌ Failed to delete field ') + cfg.name);
-  });
+  const catField = allFields.find(function (f) { return f.name === CATEGORY_FIELD_NAME; });
+  if (catField) {
+    const res = UrlFetchApp.fetch(getSiteUrl_() + '/rest/api/3/field/' + catField.id, { method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true });
+    Logger.log((res.getResponseCode() < 300 ? '🗑️  Deleted field ' : '❌ Failed to delete field ') + CATEGORY_FIELD_NAME);
+  }
 
-  // 3. Delete issue type screen scheme, screen scheme, screen
+  deleteByName_('/rest/api/3/issuetypescheme/search?maxResults=100', 'values', WORK_TYPE_SCHEME_NAME, '/rest/api/3/issuetypescheme/');
   deleteByName_('/rest/api/3/issuetypescreenscheme?maxResults=100', 'values', ISSUE_TYPE_SCREEN_SCHEME_NAME, '/rest/api/3/issuetypescreenscheme/');
   deleteByName_('/rest/api/3/screenscheme?maxResults=100', 'values', SCREEN_SCHEME_NAME, '/rest/api/3/screenscheme/');
+
   const screens = jiraRequest_('GET', '/rest/api/3/screens?maxResults=100');
   if (screens && screens.values) {
     const s = screens.values.find(function (x) { return x.name === SCREEN_NAME; });
     if (s) {
-      const res = UrlFetchApp.fetch(getSiteUrl_() + '/rest/api/3/screens/' + s.id, {
-        method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true,
-      });
-      if (res.getResponseCode() < 300) {
-        Logger.log('🗑️  Deleted screen');
-      } else {
-        Logger.log('❌ Failed to delete screen: HTTP ' + res.getResponseCode() + ' — ' + res.getContentText());
-      }
+      const res = UrlFetchApp.fetch(getSiteUrl_() + '/rest/api/3/screens/' + s.id, { method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true });
+      Logger.log(res.getResponseCode() < 300 ? '🗑️  Deleted screen' : '❌ Failed to delete screen: HTTP ' + res.getResponseCode());
     }
   }
 
-  // 4. Delete workflow scheme (workflow itself often can't be deleted while referenced; delete scheme first)
   deleteByName_('/rest/api/3/workflowscheme?maxResults=100', 'values', WORKFLOW_SCHEME_NAME, '/rest/api/3/workflowscheme/');
 
   Logger.log('========== FACTORY RESET COMPLETE ==========');
-  Logger.log('Note: statuses created via /rest/api/3/statuses/create are global');
-  Logger.log('and may persist even after this reset — Jira does not always allow');
-  Logger.log('deleting statuses that were ever used. Check Settings → Issues → Statuses');
-  Logger.log('manually if you want those fully gone too.');
+  Logger.log('Note: priorities and global statuses are not removed by this reset — clean up manually via Settings if needed.');
 }
 
 function deleteByName_(searchPath, listKey, name, deletePathPrefix) {
@@ -758,15 +530,6 @@ function deleteByName_(searchPath, listKey, name, deletePathPrefix) {
   const list = res && res[listKey] ? res[listKey] : [];
   const item = list.find(function (x) { return x.name === name; });
   if (!item) return;
-  const delRes = UrlFetchApp.fetch(getSiteUrl_() + deletePathPrefix + item.id, {
-    method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true,
-  });
-  if (delRes.getResponseCode() < 300) {
-    Logger.log('🗑️  Deleted ' + name);
-  } else {
-    Logger.log('❌ Failed to delete ' + name + ': HTTP ' + delRes.getResponseCode() + ' — ' + delRes.getContentText());
-    Logger.log('   (Likely cause: a trashed-but-not-purged project still references this.');
-    Logger.log('    Empty Jira Settings → Projects → Trash, then retry — or ignore, since');
-    Logger.log('    runFullJiraSetup() will just reuse the existing object by name.)');
-  }
+  const delRes = UrlFetchApp.fetch(getSiteUrl_() + deletePathPrefix + item.id, { method: 'delete', headers: { 'Authorization': getAuthHeader_() }, muteHttpExceptions: true });
+  Logger.log((delRes.getResponseCode() < 300 ? '🗑️  Deleted ' : '❌ Failed to delete ') + name + (delRes.getResponseCode() >= 300 ? ': HTTP ' + delRes.getResponseCode() : ''));
 }
