@@ -1,8 +1,73 @@
 #!/usr/bin/env python3
 """
 Notion → Confluence Cloud Migration Script
-Version: 1.0
+Version: 1.18
 Target DB: 06. Work (Notion) → WORK space (Confluence Cloud)
+
+Changelog:
+  1.0  Initial release — Phase 0-4, dry-run, build sheet, property mapping
+  1.1  Fixed syntax error: _space_id_cache class attribute declaration
+  1.2  Added batch control (BATCH_SIZE / BATCH_NUMBER), dotenv support,
+       VS Code launch.json, completion guidance in logs
+  1.3  Fixed NoneType crash on null block content (block.get(btype) or {});
+       fixed attachment endpoint (v1 /child/attachment + X-Atlassian-Token);
+       fixed edit restriction endpoint + payload; restriction made non-fatal
+  1.4  Per-block try/except — one bad block never crashes whole page;
+       fixed callout icon null (icon.get() or {}); applied or[] guard to all
+       rich_text/caption/cells; unsupported blocks (Notion Tabs) emit warning
+       callout in Confluence with link back to Notion source
+  1.5  All API calls switched from v2 → v1 for Fabric editor compatibility;
+       existing pages now updated (not skipped) on retry; version re-fetched
+       before update to avoid conflicts; account ID auto-verified on live run
+  1.6  Properties rendered as two-part output: visible table + hidden details
+       macro. Reverted after double-rendering issue in Fabric edit mode.
+  1.7  Removed details macro entirely, plain table only. Reverted after user
+       confirmed collapsible panel is preferred over always-visible table.
+  1.8  Restored details macro as sole properties renderer (no duplicate table);
+       added hidden=true for collapsed-by-default in view mode; version
+       tracking added to header with full changelog
+  1.9  Wrapped Page Properties (details) macro inside an Expand macro so
+       properties appear as a clickable expand toggle in view mode —
+       not hidden, just collapsed until clicked
+  1.10 Reverted all API calls back to v2 (Confluence Cloud Fabric editor).
+       v1 was incorrectly substituted in 1.5 — v2 is the correct API for
+       Confluence Cloud. Storage format is accepted by v2 and Fabric renders
+       it correctly. v1 is legacy (Data Center / Server).
+  1.11 Added set_editor_v2() — explicitly sets editor content property to
+       'v2' after page creation/update. Required per Atlassian Developer
+       Community: v2 API can silently fall back to legacy editor when it
+       detects certain HTML patterns in large storage format bodies.
+       Source: community.developer.atlassian.com/t/75235
+  1.12 Removed set_editor_v2() and all calls — Fabric editor is controlled
+       by the space-level 'Convert pages automatically' setting in Confluence
+       admin. No API property hacks needed or wanted.
+  1.13 Removed apply_edit_restriction() and all calls — v1 restriction API
+       was interfering with Fabric editor. notion_created_date is visible
+       in the Page Properties table; locking is not needed.
+  1.14 Removed get_my_account_id(), account ID verification block, and
+       admin_id entirely — no longer needed without restriction feature.
+  1.15 Eliminated two-step create+update pattern that caused 'Content
+       loading...' to persist when the second update failed silently.
+       Pages now created with full content in a single API call.
+       Attachments run in a second pass only when blocks contain files.
+  1.16 Added "subtype": "live" to create_page payload — confirmed required
+       by official Confluence Cloud v2 API docs to create pages in Fabric
+       editor. Without it pages are created in legacy editor format.
+  1.17 Added "subtype": "live" to update_page payload — required to preserve
+       live doc status on update; omitting it reverts page to legacy format.
+       Added copy_page() method and USE_TEMPLATE_PAGE_ID config variable:
+       if set, each page is created by copying the template page then
+       overwriting content, preserving template layout and live doc subtype.
+       Confirmed against official Confluence v2 API (create/update) and
+       v1 copy endpoint: POST /wiki/rest/api/content/{id}/copy.
+  1.18 Fixed copy_page() payload: removed 'body' override from copy call.
+       Official docs confirm the body field in /content/{id}/copy uses
+       representation='view' and is optional — sending it with storage
+       format forces legacy editor on the copy. Removing it lets the copy
+       inherit the template's subtype (live doc) unchanged, so the
+       subsequent update_page with subtype='live' works correctly.
+       Source: developer.atlassian.com/cloud/confluence/rest/v1/
+       api-group-content---children-and-descendants/#api-wiki-rest-api-content-id-copy-post
 
 Architecture:
   Phase 0 — Build Sheet       : Query Notion, produce dry-run XLSX manifest
@@ -60,44 +125,36 @@ NOTION_DB_ID = "37761870-08a2-8199-941a-c6e481ccf03e"
 DRY_RUN = False
 
 # ── Batch control ─────────────────────────────────────────────────────────────
-# How many pages to migrate per run when DRY_RUN = False.
-# Script stops after BATCH_SIZE pages so you can inspect results in Confluence
-# before continuing. Set BATCH_SIZE = 0 to migrate ALL pending pages at once.
-#
-# Workflow:
-#   1. Set DRY_RUN=False, BATCH_SIZE=5, BATCH_NUMBER=0 → run → check 5 pages
-#   2. Happy with results → set BATCH_NUMBER=1 → run → check next 5
-#   3. Keep incrementing BATCH_NUMBER until all rows show DONE in build sheet
-#   4. Or set BATCH_SIZE=0 to run everything remaining in one shot
-BATCH_SIZE   = 3   # pages per run  (0 = unlimited)
+BATCH_SIZE   = 1   # pages per run  (0 = unlimited)
 BATCH_NUMBER = 0   # which batch to run (0-indexed, auto-advances via build sheet)
 
 # ── Build sheet path ──────────────────────────────────────────────────────────
 BUILD_SHEET_PATH = "notion_confluence_build_sheet.xlsx"
 
 # ── Jira backlink field ───────────────────────────────────────────────────────
-# customfield_10085 = "Confluence Page(s)" confirmed in your Jira schema CSV
 JIRA_CONFLUENCE_FIELD = "customfield_10085"
 
 # ── Confluence target ─────────────────────────────────────────────────────────
 CONFLUENCE_SPACE_KEY = os.getenv("CONFLUENCE_SPACE_KEY", "WORK")
 CONFLUENCE_PARENT_ID = os.getenv("CONFLUENCE_PARENT_ID", "")  # blank = space root
 
+# ── Template page ─────────────────────────────────────────────────────────────
+# If set to a Confluence page ID, each new page is created by COPYING this
+# template page (preserves template formatting, macros, layout, and live doc
+# subtype). The copy's content is then overwritten with the Notion content.
+# If empty, pages are created from scratch using POST /wiki/api/v2/pages.
+# Get the page ID from the URL: /wiki/spaces/WORK/pages/{PAGE_ID}
+USE_TEMPLATE_PAGE_ID = ""  # e.g. "123456" or leave empty
+
 # ── Rate limiting ─────────────────────────────────────────────────────────────
-# Confluence Cloud sustained limit ~10 req/s. 0.15 s = ~6 req/s (safe)
 REQUEST_DELAY_S = 0.15
 
 # ─────────────────────────────────────────────
 # PROPERTY MAPPING TABLE
-# Notion property name → Confluence Page Properties macro key
-# Derived from analysis of 06. Work schema + Jira schema
-# Fields dropped: page_type, DB Name, formulas, rollups, relations,
-#                 Notion Entity Type, ClickUp Task, Like, Rize*
 # ─────────────────────────────────────────────
 PROPERTY_MAP = {
-    # Notion field name          : Confluence macro key
-    "Name"                       : "title",           # handled as page title, not a macro key
-    "Created"                    : "notion_created_date",  # write-once locked
+    "Name"                       : "title",
+    "Created"                    : "notion_created_date",
     "Status"                     : "status",
     "Priority"                   : "priority",
     "Category"                   : "category",
@@ -109,17 +166,10 @@ PROPERTY_MAP = {
     "Date"                       : "entry_date",
     "Author"                     : "author",
     "AI summary"                 : "ai_summary",
-    # Provenance (new — not in Notion schema, added for migration traceability)
     "_notion_page_id"            : "notion_page_id",
     "_jira_issue_link"           : "jira_issue_link",
-    # Attachment fields handled separately (binary transfer, not macro key-value)
-    # Dropped: Page Type, DB Name, formulas, rollups, all relations,
-    #          Notion Entity Type, ClickUp Task, Like, Rize*, Since last change,
-    #          Latest Child Created, Days Since Last Child Created, Children,
-    #          Parent item, Sub-item, Updated (last_edited_time → not migrated)
 }
 
-# Notion status values → normalized label
 STATUS_MAP = {
     "Not started" : "Not Started",
     "In progress" : "In Progress",
@@ -148,11 +198,6 @@ log = logging.getLogger(__name__)
 # ─────────────────────────────────────────────
 
 class NotionClient:
-    """
-    Wraps Notion REST API v1.
-    Ref: https://developers.notion.com/reference
-    All endpoints return parsed JSON dicts.
-    """
     BASE = "https://api.notion.com/v1"
     VERSION = "2022-06-28"
 
@@ -177,7 +222,6 @@ class NotionClient:
         return r.json()
 
     def query_database(self, db_id: str) -> list:
-        """Returns all pages in a database, handling pagination."""
         results, cursor = [], None
         while True:
             body = {"page_size": 100}
@@ -192,11 +236,6 @@ class NotionClient:
         return results
 
     def get_page_blocks(self, page_id: str) -> list:
-        """
-        Returns all block children of a page recursively.
-        Handles pagination per block.
-        Ref: https://developers.notion.com/reference/get-block-children
-        """
         return self._get_children(page_id)
 
     def _get_children(self, block_id: str) -> list:
@@ -219,19 +258,12 @@ class NotionClient:
         return results
 
     def download_file(self, url: str) -> bytes:
-        """Downloads a Notion file URL (signed S3 URL). Returns raw bytes."""
         time.sleep(REQUEST_DELAY_S)
         r = requests.get(url, timeout=60)
         r.raise_for_status()
         return r.content
 
     def extract_properties(self, page: dict) -> dict:
-        """
-        Extracts all properties from a Notion page into a flat dict.
-        Handles: title, rich_text, select, multi_select, status, date,
-                 created_time, last_edited_time, url, checkbox, files, people.
-        Drops: relation, rollup, formula (Notion-internal, not portable).
-        """
         props = {}
         raw = page.get("properties", {})
 
@@ -282,14 +314,13 @@ class NotionClient:
                         p.get("name", p.get("id", "")) for p in people
                     )
                 elif t in ("relation", "rollup", "formula"):
-                    pass  # intentionally dropped
+                    pass
                 else:
                     props[name] = ""
             except Exception as e:
                 log.warning(f"Property extract error [{name}]: {e}")
                 props[name] = ""
 
-        # Inject provenance fields
         props["_notion_page_id"] = page.get("id", "")
         props["_notion_url"] = page.get("url", "")
         return props
@@ -297,9 +328,8 @@ class NotionClient:
 
 class ConfluenceClient:
     """
-    Wraps Confluence Cloud REST API v2 (content) and v1 (restrictions).
+    Wraps Confluence Cloud REST API v2 (pages) and v1 (attachments, copy).
     Ref: https://developer.atlassian.com/cloud/confluence/rest/v2/intro/
-         https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-content-restrictions/
     """
     def __init__(self, base_url: str, email: str, token: str):
         self.base = base_url.rstrip("/")
@@ -331,7 +361,6 @@ class ConfluenceClient:
 
     def find_page_by_title(self, space_key: str, title: str) -> dict | None:
         """
-        Search for an existing page by exact title in a space.
         Ref: GET /wiki/api/v2/pages
         """
         r = self._v2("GET", "/pages", params={
@@ -345,8 +374,10 @@ class ConfluenceClient:
     def create_page(self, space_key: str, title: str, body_storage: str,
                     parent_id: str = "") -> dict:
         """
-        Creates a new Confluence page with storage format body.
+        Creates a new Confluence live doc page with storage format body.
         Ref: POST /wiki/api/v2/pages
+        "subtype": "live" is required to create a Fabric live doc page.
+        Without it the page is created in legacy editor format.
         """
         payload = {
             "spaceId": self._get_space_id(space_key),
@@ -356,6 +387,7 @@ class ConfluenceClient:
                 "representation": "storage",
                 "value": body_storage,
             },
+            "subtype": "live",
         }
         if parent_id:
             payload["parentId"] = parent_id
@@ -367,6 +399,8 @@ class ConfluenceClient:
         """
         Updates an existing page body.
         Ref: PUT /wiki/api/v2/pages/{id}
+        "subtype": "live" must be included to preserve live doc status.
+        Omitting it reverts the page to legacy editor format on update.
         """
         payload = {
             "id": page_id,
@@ -377,9 +411,49 @@ class ConfluenceClient:
                 "representation": "storage",
                 "value": body_storage,
             },
+            "subtype": "live",
         }
         r = self._v2("PUT", f"/pages/{page_id}", json=payload)
         return r.json()
+
+    def copy_page(self, template_page_id: str, space_key: str,
+                  title: str, parent_id: str = "") -> dict:
+        """
+        Copies an existing Confluence page to use as a template base.
+        Ref: POST /wiki/rest/api/content/{id}/copy  (v1 — no v2 equivalent)
+        The copy preserves the template's structure and subtype (live doc).
+        Content is overwritten in a subsequent update_page call.
+        """
+        payload = {
+            "copyAttachments": False,
+            "copyPermissions": False,
+            "copyProperties": False,
+            "copyLabels": False,
+            "copyCustomContents": False,
+            "destination": {
+                "type": "space",
+                "value": space_key,
+            },
+            "pageTitle": title,
+            # No 'body' override — let the copy inherit the template's content
+            # and subtype (live doc). The body is overwritten by update_page()
+            # immediately after. Sending a body here with storage format forces
+            # the copy into legacy editor format, breaking Fabric.
+            # Confirmed: official docs show body.representation must be "view"
+            # (not "storage") if supplied, and it is optional.
+        }
+        if parent_id:
+            payload["destination"] = {
+                "type": "parent_page",
+                "value": parent_id,
+            }
+        r = self._v1("POST", f"/content/{template_page_id}/copy", json=payload)
+        return r.json()
+
+    def get_page_version(self, page_id: str) -> int:
+        """Returns current version number of a page."""
+        r = self._v2("GET", f"/pages/{page_id}")
+        return r.json().get("version", {}).get("number", 1)
 
     _space_id_cache: dict = {}
 
@@ -402,10 +476,8 @@ class ConfluenceClient:
                           data: bytes, mime_type: str) -> dict:
         """
         Uploads a file as an attachment to a Confluence page.
-        Ref: POST /wiki/rest/api/content/{id}/child/attachment  (v1 — attachments
-             are NOT in v2 API as of 2026; v2 returns 405 Method Not Allowed)
+        Ref: POST /wiki/rest/api/content/{id}/child/attachment  (v1 — no v2 equivalent)
         Requires X-Atlassian-Token: no-check header to bypass XSRF protection.
-        Uses multipart/form-data — Content-Type must NOT be set (requests sets it).
         """
         time.sleep(REQUEST_DELAY_S)
         url = f"{self.base}/wiki/rest/api/content/{page_id}/child/attachment"
@@ -425,69 +497,8 @@ class ConfluenceClient:
         r.raise_for_status()
         return r.json()
 
-    def apply_edit_restriction(self, page_id: str, admin_account_id: str) -> None:
-        """
-        Restricts 'update' operation on a page to a single admin user.
-        This is the locking mechanism for notion_created_date.
-
-        Ref: PUT /wiki/rest/api/content/{id}/restriction/byOperation/{operationKey}
-        Correct payload per Confluence Cloud REST API docs (2024+):
-          Array of user objects with type + accountId at the top level of results.
-        Note: accountId must be the Atlassian Cloud accountId (the one from
-          https://yoursite.atlassian.net/rest/api/3/myself — NOT a profile page ID).
-          Run get_my_account_id() below to retrieve and verify your accountId.
-        """
-        if not admin_account_id:
-            log.warning("  ⚠ CONFLUENCE_ADMIN_ACCOUNT_ID not set — skipping restriction")
-            return
-
-        # Correct endpoint: byOperation/{operationKey} with array body
-        # Ref: https://developer.atlassian.com/cloud/confluence/rest/v1/api-group-content-restrictions/
-        payload = [
-            {
-                "type": "known",
-                "accountId": admin_account_id,
-            }
-        ]
-        try:
-            self._v1(
-                "PUT",
-                f"/content/{page_id}/restriction/byOperation/update/user",
-                params={"accountId": admin_account_id},
-                json=payload,
-            )
-            log.info(f"  ✓ Edit restriction applied to page {page_id}")
-        except Exception as e:
-            # Restriction failure is non-fatal — page content is already migrated
-            log.warning(f"  ⚠ Edit restriction failed (non-fatal): {e}")
-            log.warning(f"    Verify CONFLUENCE_ADMIN_ACCOUNT_ID via: "
-                        f"curl -u email:token {self.base}/wiki/rest/api/user/current")
-
-    def get_my_account_id(self) -> str:
-        """
-        Helper to retrieve your Atlassian accountId — use this to verify
-        CONFLUENCE_ADMIN_ACCOUNT_ID is correct before running restrictions.
-        Prints the correct value to use in your .env file.
-        Ref: GET /wiki/rest/api/user/current
-        """
-        r = self._v1("GET", "/user/current")
-        account_id = r.json().get("accountId", "")
-        log.info(f"Your Confluence accountId: {account_id}")
-        log.info(f"Set CONFLUENCE_ADMIN_ACCOUNT_ID={account_id} in your .env file")
-        return account_id
-
-    def get_page_version(self, page_id: str) -> int:
-        """Returns current version number of a page."""
-        r = self._v2("GET", f"/pages/{page_id}")
-        return r.json().get("version", {}).get("number", 1)
-
 
 class JiraClient:
-    """
-    Wraps Jira Cloud REST API v3.
-    Ref: https://developer.atlassian.com/cloud/jira/platform/rest/v3/
-    Used only to write the Confluence backlink into customfield_10085.
-    """
     def __init__(self, base_url: str, email: str, token: str):
         self.base = base_url.rstrip("/")
         creds = base64.b64encode(f"{email}:{token}".encode()).decode()
@@ -501,7 +512,6 @@ class JiraClient:
     def update_issue_confluence_link(self, issue_key: str,
                                      confluence_url: str) -> None:
         """
-        Writes Confluence page URL to customfield_10085 on a Jira issue.
         Ref: PUT /rest/api/3/issue/{issueIdOrKey}
         """
         time.sleep(REQUEST_DELAY_S)
@@ -519,7 +529,6 @@ class JiraClient:
 # ─────────────────────────────────────────────
 
 def _escape_xml(text: str) -> str:
-    """Escape special XML characters for Confluence storage format."""
     return (text
             .replace("&", "&amp;")
             .replace("<", "&lt;")
@@ -528,17 +537,11 @@ def _escape_xml(text: str) -> str:
 
 
 def _rich_text_to_storage(rich_texts: list) -> str:
-    """
-    Converts Notion rich_text array to Confluence storage format HTML.
-    Handles: bold, italic, strikethrough, underline, code, color, links.
-    Ref: https://developer.atlassian.com/cloud/confluence/confluence-storage-format/
-    """
     out = ""
     for rt in rich_texts:
         text = _escape_xml(rt.get("plain_text", ""))
         ann = rt.get("annotations", {})
         href = rt.get("href")
-
         if ann.get("code"):
             text = f"<code>{text}</code>"
         if ann.get("bold"):
@@ -551,8 +554,6 @@ def _rich_text_to_storage(rich_texts: list) -> str:
             text = f"<u>{text}</u>"
         color = ann.get("color", "default")
         if color and color != "default" and not color.endswith("_background"):
-            # Confluence storage supports ac:parameter color via structured macros;
-            # inline color applied via span for plain rich text
             text = f'<span style="color:{color};">{text}</span>'
         if href:
             text = f'<a href="{_escape_xml(href)}">{text}</a>'
@@ -562,22 +563,10 @@ def _rich_text_to_storage(rich_texts: list) -> str:
 
 def blocks_to_storage(blocks: list, confluence_client=None,
                       page_id: str = "", attachment_map: dict = None) -> str:
-    """
-    Recursively converts Notion block list to Confluence storage format XML.
-    Handles:
-      paragraph, heading_1/2/3, bulleted_list_item, numbered_list_item,
-      to_do, toggle, quote, code, divider, callout, table, table_row,
-      image, file, pdf, video, embed, bookmark, child_page, synced_block,
-      column_list, column.
-    Attachments (image/file/pdf): downloaded from Notion and uploaded to
-    Confluence if confluence_client and page_id are provided.
-    attachment_map: dict to accumulate {notion_url: confluence_attachment_url}
-    """
     if attachment_map is None:
         attachment_map = {}
 
     html = ""
-    # Track list state for wrapping <ul>/<ol>
     prev_list_type = None
     list_buffer = ""
 
@@ -591,8 +580,6 @@ def blocks_to_storage(blocks: list, confluence_client=None,
 
     for block in blocks:
         btype = block.get("type", "")
-        # Guard: Notion occasionally returns null block content
-        # e.g. {"type":"paragraph","paragraph":null}
         data = block.get(btype) or {}
         children_html = ""
         if block.get("_children"):
@@ -604,12 +591,11 @@ def blocks_to_storage(blocks: list, confluence_client=None,
                 log.warning(f"  ⚠ Child blocks failed [{btype}]: {_ce} — skipping children")
                 children_html = ""
 
-        # ── List items ──────────────────────────────────────────────────────
         if btype == "bulleted_list_item":
             if prev_list_type != "ul":
                 flush_list()
                 prev_list_type = "ul"
-            inner = _rich_text_to_storage(data.get("rich_text", []))
+            inner = _rich_text_to_storage(data.get("rich_text") or [])
             if children_html:
                 inner += f"<ul>{children_html}</ul>"
             list_buffer += f"<li>{inner}</li>"
@@ -619,76 +605,61 @@ def blocks_to_storage(blocks: list, confluence_client=None,
             if prev_list_type != "ol":
                 flush_list()
                 prev_list_type = "ol"
-            inner = _rich_text_to_storage(data.get("rich_text", []))
+            inner = _rich_text_to_storage(data.get("rich_text") or [])
             if children_html:
                 inner += f"<ol>{children_html}</ol>"
             list_buffer += f"<li>{inner}</li>"
             continue
 
-        # Any non-list block flushes the pending list
         flush_list()
 
-        # One bad block must never crash the whole page conversion
         try:
-            # ── Headings ─────────────────────────────────────────────────────────
             if btype == "heading_1":
-                html += f"<h1>{_rich_text_to_storage(data.get('rich_text', []))}</h1>"
-
+                html += f"<h1>{_rich_text_to_storage(data.get('rich_text') or [])}</h1>"
             elif btype == "heading_2":
-                html += f"<h2>{_rich_text_to_storage(data.get('rich_text', []))}</h2>"
-
+                html += f"<h2>{_rich_text_to_storage(data.get('rich_text') or [])}</h2>"
             elif btype == "heading_3":
-                html += f"<h3>{_rich_text_to_storage(data.get('rich_text', []))}</h3>"
-
-            # ── Paragraph ────────────────────────────────────────────────────────
+                html += f"<h3>{_rich_text_to_storage(data.get('rich_text') or [])}</h3>"
             elif btype == "paragraph":
-                inner = _rich_text_to_storage(data.get("rich_text", []))
+                inner = _rich_text_to_storage(data.get("rich_text") or [])
                 if not inner and not children_html:
                     html += "<p>&nbsp;</p>"
                 else:
                     html += f"<p>{inner}{children_html}</p>"
-
-            # ── To-do ────────────────────────────────────────────────────────────
             elif btype == "to_do":
                 checked = data.get("checked", False)
                 check = "✅ " if checked else "☐ "
-                inner = _rich_text_to_storage(data.get("rich_text", []))
+                inner = _rich_text_to_storage(data.get("rich_text") or [])
                 html += f"<p>{check}{inner}</p>"
-
-            # ── Quote ────────────────────────────────────────────────────────────
             elif btype == "quote":
-                inner = _rich_text_to_storage(data.get("rich_text", []))
+                inner = _rich_text_to_storage(data.get("rich_text") or [])
                 html += (
                     f'<blockquote><p>{inner}</p>'
                     f'{children_html}</blockquote>'
                 )
-
-            # ── Code ─────────────────────────────────────────────────────────────
             elif btype == "code":
                 lang = data.get("language", "plain text")
                 code_text = _escape_xml(
                     "".join(rt.get("plain_text", "")
-                            for rt in data.get("rich_text", []))
+                            for rt in data.get("rich_text") or [])
                 )
-                # Confluence Code Block macro
                 html += (
                     f'<ac:structured-macro ac:name="code" ac:schema-version="1">'
                     f'<ac:parameter ac:name="language">{_escape_xml(lang)}</ac:parameter>'
                     f'<ac:plain-text-body><![CDATA[{code_text}]]></ac:plain-text-body>'
                     f'</ac:structured-macro>'
                 )
-
-            # ── Divider ──────────────────────────────────────────────────────────
             elif btype == "divider":
                 html += "<hr/>"
-
-            # ── Callout ──────────────────────────────────────────────────────────
             elif btype == "callout":
-                inner = _rich_text_to_storage(data.get("rich_text", []))
+                inner = _rich_text_to_storage(data.get("rich_text") or [])
                 emoji = ""
-                icon = data.get("icon", {})
-                if icon.get("type") == "emoji":
-                    emoji = icon.get("emoji", "")
+                icon = data.get("icon") or {}
+                icon_type = icon.get("type", "")
+                if icon_type == "emoji":
+                    emoji = icon.get("emoji", "") or ""
+                elif icon_type == "external":
+                    emoji = "📋"
                 html += (
                     f'<ac:structured-macro ac:name="info" ac:schema-version="1">'
                     f'<ac:rich-text-body>'
@@ -697,23 +668,19 @@ def blocks_to_storage(blocks: list, confluence_client=None,
                     f'</ac:rich-text-body>'
                     f'</ac:structured-macro>'
                 )
-
-            # ── Toggle ───────────────────────────────────────────────────────────
             elif btype == "toggle":
-                inner = _rich_text_to_storage(data.get("rich_text", []))
+                inner = _rich_text_to_storage(data.get("rich_text") or [])
                 html += (
                     f'<ac:structured-macro ac:name="expand" ac:schema-version="1">'
                     f'<ac:parameter ac:name="title">{inner}</ac:parameter>'
                     f'<ac:rich-text-body>{children_html}</ac:rich-text-body>'
                     f'</ac:structured-macro>'
                 )
-
-            # ── Table ────────────────────────────────────────────────────────────
             elif btype == "table":
                 has_header = data.get("has_column_header", False)
                 table_html = "<table><tbody>"
                 for i, row_block in enumerate(block.get("_children", [])):
-                    cells = row_block.get("table_row", {}).get("cells", [])
+                    cells = (row_block.get("table_row") or {}).get("cells") or []
                     table_html += "<tr>"
                     for cell in cells:
                         cell_content = _rich_text_to_storage(cell)
@@ -722,12 +689,9 @@ def blocks_to_storage(blocks: list, confluence_client=None,
                     table_html += "</tr>"
                 table_html += "</tbody></table>"
                 html += table_html
-                continue  # children already processed above
-
+                continue
             elif btype == "table_row":
-                continue  # handled inside table block
-
-            # ── Column list / Column ─────────────────────────────────────────────
+                continue
             elif btype == "column_list":
                 cols = block.get("_children", [])
                 col_count = max(len(cols), 1)
@@ -750,11 +714,8 @@ def blocks_to_storage(blocks: list, confluence_client=None,
                 layout_html += f'</ac:rich-text-body></ac:structured-macro>'
                 html += layout_html
                 continue
-
             elif btype == "column":
-                continue  # handled inside column_list
-
-            # ── Image ────────────────────────────────────────────────────────────
+                continue
             elif btype == "image":
                 img_url, filename = _extract_file_url(data, "image")
                 if img_url:
@@ -762,12 +723,10 @@ def blocks_to_storage(blocks: list, confluence_client=None,
                         img_url, filename, confluence_client, page_id,
                         attachment_map, is_image=True
                     )
-                    caption = _rich_text_to_storage(data.get("caption", []))
+                    caption = _rich_text_to_storage(data.get("caption") or [])
                     html += att_html
                     if caption:
                         html += f"<p><em>{caption}</em></p>"
-
-            # ── File (generic, includes embedded docs) ───────────────────────────
             elif btype == "file":
                 file_url, filename = _extract_file_url(data, "file")
                 if file_url:
@@ -775,42 +734,32 @@ def blocks_to_storage(blocks: list, confluence_client=None,
                         file_url, filename, confluence_client, page_id,
                         attachment_map, is_image=False
                     )
-                    caption = _rich_text_to_storage(data.get("caption", []))
+                    caption = _rich_text_to_storage(data.get("caption") or [])
                     html += att_html
                     if caption:
                         html += f"<p><em>{caption}</em></p>"
-
-            # ── PDF ──────────────────────────────────────────────────────────────
             elif btype == "pdf":
                 pdf_url, filename = _extract_file_url(data, "pdf")
                 if pdf_url:
-                    # Upload as attachment, then embed via PDF macro
                     att_html = _handle_file_attachment(
                         pdf_url, filename, confluence_client, page_id,
                         attachment_map, is_image=False, is_pdf=True
                     )
                     html += att_html
-
-            # ── Bookmark / Link Preview ──────────────────────────────────────────
             elif btype in ("bookmark", "link_preview"):
                 url = data.get("url", "")
-                caption = _rich_text_to_storage(data.get("caption", []))
+                caption = _rich_text_to_storage(data.get("caption") or [])
                 display = caption if caption else _escape_xml(url)
                 if url:
                     html += f'<p><a href="{_escape_xml(url)}">{display}</a></p>'
-
-            # ── Embed (YouTube, PPTX preview, Figma, etc.) ───────────────────────
             elif btype == "embed":
                 url = data.get("url", "")
                 if url:
-                    # Use Confluence Widget Connector macro for embeddable URLs
                     html += (
                         f'<ac:structured-macro ac:name="widget" ac:schema-version="1">'
                         f'<ac:parameter ac:name="url">{_escape_xml(url)}</ac:parameter>'
                         f'</ac:structured-macro>'
                     )
-
-            # ── Video ────────────────────────────────────────────────────────────
             elif btype == "video":
                 vid_url, _ = _extract_file_url(data, "video")
                 if vid_url:
@@ -819,8 +768,6 @@ def blocks_to_storage(blocks: list, confluence_client=None,
                         f'<ac:parameter ac:name="url">{_escape_xml(vid_url)}</ac:parameter>'
                         f'</ac:structured-macro>'
                     )
-
-            # ── Child page reference ──────────────────────────────────────────────
             elif btype == "child_page":
                 title = data.get("title", "")
                 child_id = block.get("id", "")
@@ -828,23 +775,38 @@ def blocks_to_storage(blocks: list, confluence_client=None,
                     f'<p>📄 <em>Child page: {_escape_xml(title)}'
                     f' (Notion ID: {child_id})</em></p>'
                 )
-
-            # ── Synced block ──────────────────────────────────────────────────────
             elif btype == "synced_block":
                 if children_html:
                     html += children_html
                 else:
-                    # Synced from another block — children are the content
                     html += f"<p><em>[Synced block — content above]</em></p>"
-
-            # ── Equation ─────────────────────────────────────────────────────────
             elif btype == "equation":
                 expr = _escape_xml(data.get("expression", ""))
                 html += f"<p><code>{expr}</code></p>"
-
-            # ── Unknown block type — preserve as note ────────────────────────────
             else:
-                if btype not in ("unsupported",):
+                if btype == "unsupported":
+                    block_url = (
+                        f"https://www.notion.so/{page_id.replace('-', '')}"
+                        if page_id else "#"
+                    )
+                    log.warning(
+                        f"  ⚠ Unsupported block id={block.get('id', '?')} "
+                        f"— likely Notion Tabs (not accessible via API)"
+                    )
+                    html += (
+                        '<ac:structured-macro ac:name="warning" ac:schema-version="1">'
+                        '<ac:parameter ac:name="title">Content not migrated — Notion Tabs block</ac:parameter>'
+                        '<ac:rich-text-body>'
+                        '<p>This section contained a <strong>Notion block type not supported '
+                        'by the Notion public API</strong> — most likely a <strong>Tabs</strong> block. '
+                        'The Tabs feature was added by Notion in 2024 but is not yet exposed '
+                        'in the API, so neither the tab structure nor its content can be read.</p>'
+                        f'<p>&#128279; <a href="{block_url}">Open original in Notion</a> '
+                        'to copy this content manually into Confluence.</p>'
+                        '</ac:rich-text-body>'
+                        '</ac:structured-macro>'
+                    )
+                else:
                     log.debug(f"Unhandled block type: {btype}")
                     html += f"<p><em>[Block type '{btype}' not rendered]</em></p>"
 
@@ -865,19 +827,12 @@ def blocks_to_storage(blocks: list, confluence_client=None,
 
 
 def _extract_file_url(data: dict, block_type: str) -> tuple[str, str]:
-    """
-    Extracts URL and filename from a Notion file/image/pdf block.
-    Returns (url, filename).
-    Handles both 'external' (public URL) and 'file' (signed S3 URL) types.
-    """
     file_obj = data.get("external") or data.get("file")
     if not file_obj:
         return "", f"{block_type}_file"
     url = file_obj.get("url", "")
-    # Extract filename from URL path (before query string)
     path_part = url.split("?")[0]
     filename = path_part.split("/")[-1] or f"{block_type}_file"
-    # Ensure extension
     if "." not in filename:
         ext_map = {"image": ".png", "pdf": ".pdf", "file": ".bin", "video": ".mp4"}
         filename += ext_map.get(block_type, ".bin")
@@ -888,35 +843,20 @@ def _handle_file_attachment(url: str, filename: str, confluence_client,
                              page_id: str, attachment_map: dict,
                              is_image: bool = False,
                              is_pdf: bool = False) -> str:
-    """
-    Downloads a file from Notion, uploads to Confluence as an attachment,
-    and returns Confluence storage XML to inline or link it.
-
-    For images: uses ac:image macro.
-    For PDFs: uses viewfile macro (renders inline PDF viewer).
-    For other files: uses ac:link to attachment.
-    """
     if url in attachment_map:
         return attachment_map[url]
 
     if not confluence_client or not page_id:
-        # Dry run or no client — emit placeholder link
         result = f'<p><a href="{_escape_xml(url)}">{_escape_xml(filename)}</a></p>'
         attachment_map[url] = result
         return result
 
     try:
-        notion_client_temp = NotionClient.__new__(NotionClient)
-        notion_client_temp.session = requests.Session()
         file_bytes = requests.get(url, timeout=60).content
         mime, _ = mimetypes.guess_type(filename)
         mime = mime or "application/octet-stream"
-
-        att_result = confluence_client.upload_attachment(
-            page_id, filename, file_bytes, mime
-        )
+        confluence_client.upload_attachment(page_id, filename, file_bytes, mime)
         log.info(f"  ✓ Attachment uploaded: {filename}")
-
         safe_name = _escape_xml(filename)
         if is_image:
             result = (
@@ -939,7 +879,6 @@ def _handle_file_attachment(url: str, filename: str, confluence_client,
             )
         attachment_map[url] = result
         return result
-
     except Exception as e:
         log.warning(f"  ⚠ Attachment failed [{filename}]: {e}")
         result = f'<p><a href="{_escape_xml(url)}">{_escape_xml(filename)}</a></p>'
@@ -951,69 +890,95 @@ def _handle_file_attachment(url: str, filename: str, confluence_client,
 # PAGE PROPERTIES MACRO BUILDER
 # ─────────────────────────────────────────────
 
+def build_two_column_layout(content_html: str, properties_html: str) -> str:
+    return (
+        '<ac:structured-macro ac:name="column-layout" ac:schema-version="1">'
+        '<ac:rich-text-body>'
+        '<ac:structured-macro ac:name="column" ac:schema-version="1">'
+        '<ac:parameter ac:name="width">70%</ac:parameter>'
+        '<ac:rich-text-body>'
+        f'{content_html}'
+        '</ac:rich-text-body>'
+        '</ac:structured-macro>'
+        '<ac:structured-macro ac:name="column" ac:schema-version="1">'
+        '<ac:parameter ac:name="width">30%</ac:parameter>'
+        '<ac:rich-text-body>'
+        '<h4>📋 Page Properties</h4>'
+        f'{properties_html}'
+        '</ac:rich-text-body>'
+        '</ac:structured-macro>'
+        '</ac:rich-text-body>'
+        '</ac:structured-macro>'
+    )
+
+
 def build_page_properties_macro(props: dict, page_id_notion: str) -> str:
-    """
-    Builds a Confluence Page Properties macro (storage format XML) containing
-    all migrated properties as a two-column table.
+    notion_pid = props.get("_notion_page_id", "")
+    notion_url = props.get("_notion_url", "")
+    clean_id   = notion_pid.replace("-", "")
+    link_url   = notion_url if notion_url else f"https://www.notion.so/{clean_id}"
 
-    The macro enables:
-      - Page Properties Report across the space
-      - Structured metadata visible on every page
-
-    Ref: https://confluence.atlassian.com/doc/page-properties-macro-184550024.html
-    Storage format: ac:structured-macro name="details"
-    """
-    rows = ""
-
-    def add_row(key: str, value: str) -> str:
-        safe_key = _escape_xml(key)
-        safe_val = _escape_xml(str(value)) if value else ""
-        return (
-            f"<tr>"
-            f"<th><p>{safe_key}</p></th>"
-            f"<td><p>{safe_val}</p></td>"
-            f"</tr>"
-        )
-
-    # notion_created_date — always first, labeled as write-once
     created = props.get("Created", "")
-    if created:
-        # Normalize to date-only (drop time component)
-        created_display = created[:10] if len(created) >= 10 else created
-    else:
-        created_display = ""
-    rows += add_row("notion_created_date", created_display)
-    rows += add_row("notion_page_id", props.get("_notion_page_id", ""))
+    created_display = created[:10] if len(created) >= 10 else created
 
-    # Ordered remaining properties
     ordered_keys = [
-        ("status",        "Status"),
-        ("priority",      "Priority"),
-        ("category",      "Category"),
-        ("artifact_type", "Artifact Type"),
-        ("tags",          "Tags"),
-        ("company",       "Company"),
-        ("project",       "Project"),
-        ("entry_date",    "Date"),
-        ("author",        "Author"),
-        ("source_url",    "URL"),
-        ("ai_summary",    "AI Summary"),
+        ("status",          "Status"),
+        ("priority",        "Priority"),
+        ("category",        "Category"),
+        ("artifact_type",   "Artifact Type"),
+        ("tags",            "Tags"),
+        ("company",         "Company"),
+        ("project",         "Project"),
+        ("entry_date",      "Date"),
+        ("author",          "Author"),
+        ("source_url",      "URL"),
+        ("ai_summary",      "AI Summary"),
         ("jira_issue_link", "Jira Issue"),
     ]
+
+    rows = (
+        f'<tr>'
+        f'<th><p>notion_created_date</p></th>'
+        f'<td><p>{_escape_xml(created_display)}</p></td>'
+        f'</tr>'
+    )
+
+    if notion_pid:
+        rows += (
+            f'<tr>'
+            f'<th><p>notion_page_id</p></th>'
+            f'<td><p><a href="{_escape_xml(link_url)}">{_escape_xml(notion_pid)}</a></p></td>'
+            f'</tr>'
+        )
+
     for macro_key, notion_key in ordered_keys:
         val = props.get(notion_key, "")
         if val:
-            rows += add_row(macro_key, val)
+            rows += (
+                f'<tr>'
+                f'<th><p>{_escape_xml(macro_key)}</p></th>'
+                f'<td><p>{_escape_xml(str(val))}</p></td>'
+                f'</tr>'
+            )
 
-    macro = (
+    details_macro = (
         f'<ac:structured-macro ac:name="details" ac:schema-version="1">'
         f'<ac:rich-text-body>'
         f'<table><tbody>{rows}</tbody></table>'
         f'</ac:rich-text-body>'
         f'</ac:structured-macro>'
-        f'<hr/>'
     )
-    return macro
+
+    expand_macro = (
+        f'<ac:structured-macro ac:name="expand" ac:schema-version="1">'
+        f'<ac:parameter ac:name="title">📋 Page Properties</ac:parameter>'
+        f'<ac:rich-text-body>'
+        f'{details_macro}'
+        f'</ac:rich-text-body>'
+        f'</ac:structured-macro>'
+    )
+
+    return expand_macro + '<hr/>'
 
 
 # ─────────────────────────────────────────────
@@ -1021,28 +986,11 @@ def build_page_properties_macro(props: dict, page_id_notion: str) -> str:
 # ─────────────────────────────────────────────
 
 SHEET_COLS = [
-    "Notion Page ID",
-    "Notion Title",
-    "Notion URL",
-    "Notion Created",
-    "Status",
-    "Priority",
-    "Category",
-    "Artifact Type",
-    "Tags",
-    "Company",
-    "Project",
-    "Entry Date",
-    "Author",
-    "Source URL",
-    "AI Summary (truncated)",
-    "Has Attachments",
-    "Confluence Page ID",
-    "Confluence URL",
-    "Jira Issue Key",
-    "Migration Status",
-    "Migrated At",
-    "Error",
+    "Notion Page ID", "Notion Title", "Notion URL", "Notion Created",
+    "Status", "Priority", "Category", "Artifact Type", "Tags",
+    "Company", "Project", "Entry Date", "Author", "Source URL",
+    "AI Summary (truncated)", "Has Attachments", "Confluence Page ID",
+    "Confluence URL", "Jira Issue Key", "Migration Status", "Migrated At", "Error",
 ]
 
 HDR_FILL  = PatternFill("solid", start_color="1F4E79")
@@ -1064,11 +1012,6 @@ COL_WIDTHS = {
 
 
 def create_build_sheet(pages_props: list) -> None:
-    """
-    Creates the dry-run build sheet XLSX with one row per Notion page.
-    If the file already exists, loads it and only adds NEW rows
-    (idempotent — never duplicates already-present page IDs).
-    """
     existing_ids = set()
     if Path(BUILD_SHEET_PATH).exists():
         wb = load_workbook(BUILD_SHEET_PATH)
@@ -1080,8 +1023,6 @@ def create_build_sheet(pages_props: list) -> None:
         wb = Workbook()
         ws = wb.active
         ws.title = "Migration Manifest"
-
-        # Header row
         for col, name in enumerate(SHEET_COLS, 1):
             c = ws.cell(row=1, column=col, value=name)
             c.font = HDR_FONT
@@ -1090,7 +1031,6 @@ def create_build_sheet(pages_props: list) -> None:
             c.border = BORDER
         ws.freeze_panes = "A2"
         ws.row_dimensions[1].height = 28
-
         for col_letter, width in COL_WIDTHS.items():
             ws.column_dimensions[col_letter].width = width
 
@@ -1099,38 +1039,20 @@ def create_build_sheet(pages_props: list) -> None:
         pid = props.get("_notion_page_id", "")
         if pid in existing_ids:
             continue
-
-        # Detect attachments
         has_att = bool(
             props.get("File Attachments", "").strip() or
             props.get("Media Attachments", "").strip()
         )
-
         row_data = [
-            pid,
-            props.get("Name", ""),
-            props.get("_notion_url", ""),
-            (props.get("Created", "") or "")[:10],
-            props.get("Status", ""),
-            props.get("Priority", ""),
-            props.get("Category", ""),
-            props.get("Artifact Type", ""),
-            props.get("Tags", ""),
-            props.get("Company", ""),
-            props.get("Project", ""),
-            (props.get("Date", "") or "")[:10],
-            props.get("Author", ""),
-            props.get("URL", ""),
-            (props.get("AI summary", "") or "")[:120],
-            "YES" if has_att else "",
-            "",   # Confluence Page ID — filled after migration
-            "",   # Confluence URL
-            "",   # Jira Issue Key
-            "PENDING",
-            "",   # Migrated At
-            "",   # Error
+            pid, props.get("Name", ""), props.get("_notion_url", ""),
+            (props.get("Created", "") or "")[:10], props.get("Status", ""),
+            props.get("Priority", ""), props.get("Category", ""),
+            props.get("Artifact Type", ""), props.get("Tags", ""),
+            props.get("Company", ""), props.get("Project", ""),
+            (props.get("Date", "") or "")[:10], props.get("Author", ""),
+            props.get("URL", ""), (props.get("AI summary", "") or "")[:120],
+            "YES" if has_att else "", "", "", "", "PENDING", "", "",
         ]
-
         next_row = ws.max_row + 1
         for col, val in enumerate(row_data, 1):
             c = ws.cell(row=next_row, column=col, value=val)
@@ -1146,33 +1068,25 @@ def create_build_sheet(pages_props: list) -> None:
 def update_build_sheet_row(notion_page_id: str, confluence_page_id: str,
                             confluence_url: str, jira_key: str,
                             status: str, error: str = "") -> None:
-    """
-    Updates a single row in the build sheet after a page is migrated.
-    Finds the row by Notion Page ID in column A.
-    """
     if not Path(BUILD_SHEET_PATH).exists():
         log.warning("Build sheet not found — cannot update row")
         return
-
     wb = load_workbook(BUILD_SHEET_PATH)
     ws = wb.active
-
     for row in ws.iter_rows(min_row=2):
         if str(row[0].value) == notion_page_id:
-            row[16].value = confluence_page_id   # Q: Confluence Page ID
-            row[17].value = confluence_url        # R: Confluence URL
-            row[18].value = jira_key              # S: Jira Issue Key
-            row[19].value = status                # T: Migration Status
+            row[16].value = confluence_page_id
+            row[17].value = confluence_url
+            row[18].value = jira_key
+            row[19].value = status
             row[20].value = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-            row[21].value = error                 # V: Error
-
+            row[21].value = error
             fill = DONE_FILL if status == "DONE" else (
                 ERR_FILL if status == "ERROR" else SKIP_FILL
             )
             for cell in row:
                 cell.fill = fill
             break
-
     wb.save(BUILD_SHEET_PATH)
 
 
@@ -1181,7 +1095,6 @@ def update_build_sheet_row(notion_page_id: str, confluence_page_id: str,
 # ─────────────────────────────────────────────
 
 def run_phase_0_build_sheet(notion: NotionClient) -> list:
-    """Phase 0: Query Notion, extract all properties, write build sheet."""
     log.info("=" * 60)
     log.info("PHASE 0 — Building dry-run manifest")
     log.info("=" * 60)
@@ -1193,50 +1106,27 @@ def run_phase_0_build_sheet(notion: NotionClient) -> list:
 
 
 def run_migration(notion: NotionClient, confluence: ConfluenceClient,
-                  jira: JiraClient, admin_account_id: str,
-                  all_props: list = None) -> None:
-    """
-    Phases 1–4: For each page in the build sheet with status PENDING:
-      1. Retrieve blocks from Notion
-      2. Convert to Confluence storage format
-      3. Prepend Page Properties macro
-      4. Create Confluence page
-      5. Upload attachments
-      6. Apply edit restriction on notion_created_date
-      7. Write Confluence URL back to Jira
-      8. Mark row as DONE in build sheet
-    """
+                  jira: JiraClient, all_props: list = None) -> None:
     if DRY_RUN:
         log.info("DRY_RUN=True — skipping live writes. Set DRY_RUN=False to migrate.")
         return
 
     if all_props is None:
-        # Reload from build sheet
         wb = load_workbook(BUILD_SHEET_PATH)
         ws = wb.active
         all_props = []
         for row in ws.iter_rows(min_row=2, values_only=True):
             if row[0] and row[19] == "PENDING":
                 all_props.append({
-                    "_notion_page_id": row[0],
-                    "Name": row[1],
-                    "_notion_url": row[2],
-                    "Created": row[3],
-                    "Status": row[4],
-                    "Priority": row[5],
-                    "Category": row[6],
-                    "Artifact Type": row[7],
-                    "Tags": row[8],
-                    "Company": row[9],
-                    "Project": row[10],
-                    "Date": row[11],
-                    "Author": row[12],
-                    "URL": row[13],
-                    "AI summary": row[14],
-                    "_jira_issue_link": "",
+                    "_notion_page_id": row[0], "Name": row[1],
+                    "_notion_url": row[2], "Created": row[3],
+                    "Status": row[4], "Priority": row[5],
+                    "Category": row[6], "Artifact Type": row[7],
+                    "Tags": row[8], "Company": row[9], "Project": row[10],
+                    "Date": row[11], "Author": row[12], "URL": row[13],
+                    "AI summary": row[14], "_jira_issue_link": "",
                 })
 
-    # ── Apply batch slicing ──────────────────────────────────────────────────
     if BATCH_SIZE > 0:
         start = BATCH_NUMBER * BATCH_SIZE
         end   = start + BATCH_SIZE
@@ -1269,10 +1159,22 @@ def run_migration(notion: NotionClient, confluence: ConfluenceClient,
             # ── Phase 1: Check for existing page ────────────────────────────
             existing = confluence.find_page_by_title(CONFLUENCE_SPACE_KEY, title)
             if existing:
-                log.info(f"  → Already exists in Confluence, skipping create")
-                cf_page_id = existing["id"]
+                cf_page_id = str(existing["id"])
                 cf_url = f"{confluence.base}/wiki/spaces/{CONFLUENCE_SPACE_KEY}/pages/{cf_page_id}"
-                update_build_sheet_row(pid, cf_page_id, cf_url, "", "SKIPPED (exists)")
+                log.info(f"  → Page exists ({cf_page_id}) — updating content and properties...")
+                blocks = notion.get_page_blocks(pid)
+                attachment_map = {}
+                content_html = blocks_to_storage(
+                    blocks, confluence, cf_page_id, attachment_map
+                )
+                props["_jira_issue_link"] = props.get("_jira_issue_link", "")
+                props_macro = build_page_properties_macro(props, pid)
+                final_body = props_macro + content_html
+                current_version = confluence.get_page_version(cf_page_id)
+                log.info(f"  → Writing {len(final_body)} chars to page v{current_version}...")
+                confluence.update_page(cf_page_id, title, final_body, current_version)
+                log.info(f"  ✓ Updated: {cf_url}")
+                update_build_sheet_row(pid, cf_page_id, cf_url, "", "UPDATED")
                 continue
 
             # ── Phase 2: Fetch Notion blocks ─────────────────────────────────
@@ -1280,49 +1182,56 @@ def run_migration(notion: NotionClient, confluence: ConfluenceClient,
             blocks = notion.get_page_blocks(pid)
 
             # ── Phase 3: Convert blocks → storage format ──────────────────────
-            # First pass: create the page with properties macro only
-            # (need page ID to upload attachments before second pass)
-            props_macro = build_page_properties_macro(props, pid)
-            placeholder_body = props_macro + "<p><em>Content loading...</em></p>"
-
-            # ── Phase 4: Create Confluence page ──────────────────────────────
-            log.info(f"  → Creating Confluence page...")
-            created_page = confluence.create_page(
-                CONFLUENCE_SPACE_KEY, title, placeholder_body, parent_id
-            )
-            cf_page_id = created_page["id"]
-            cf_version = created_page.get("version", {}).get("number", 1)
-            cf_url = f"{confluence.base}/wiki/spaces/{CONFLUENCE_SPACE_KEY}/pages/{cf_page_id}"
-            log.info(f"  ✓ Page created: {cf_url}")
-
-            # ── Phase 5: Convert blocks with real attachment uploads ───────────
             log.info(f"  → Converting {len(blocks)} blocks...")
             attachment_map = {}
-            # blocks_to_storage is now fault-tolerant — bad blocks render as
-            # warning macros instead of raising, so this should always return HTML
-            content_html = blocks_to_storage(
-                blocks, confluence, cf_page_id, attachment_map
-            )
+            content_html = blocks_to_storage(blocks, None, "", attachment_map)
 
-            # Inject Confluence URL into properties for backlink display
             props["_jira_issue_link"] = props.get("_jira_issue_link", "")
             props_macro = build_page_properties_macro(props, pid)
             final_body = props_macro + content_html
 
-            # ── Phase 5b: Update page with real content ───────────────────────
-            # Always runs — even if some blocks had warnings, the rest of the
-            # content is there. Page will never be left showing "Content loading..."
-            log.info(f"  → Updating page with full content ({len(content_html)} chars)...")
-            # Re-fetch version number in case Confluence incremented it
-            current_version = confluence.get_page_version(cf_page_id)
-            confluence.update_page(cf_page_id, title, final_body, current_version)
-            log.info(f"  ✓ Content written to Confluence page")
+            # ── Phase 4: Create Confluence page ───────────────────────────────
+            if USE_TEMPLATE_PAGE_ID:
+                # Copy template page, then overwrite with Notion content.
+                # Preserves template layout and live doc subtype.
+                # Ref: POST /wiki/rest/api/content/{id}/copy (v1)
+                log.info(f"  → Copying template page {USE_TEMPLATE_PAGE_ID}...")
+                created_page = confluence.copy_page(
+                    USE_TEMPLATE_PAGE_ID, CONFLUENCE_SPACE_KEY, title, parent_id
+                )
+                cf_page_id = str(created_page["id"])
+                cf_url = f"{confluence.base}/wiki/spaces/{CONFLUENCE_SPACE_KEY}/pages/{cf_page_id}"
+                log.info(f"  ✓ Template copied: {cf_url}")
+                current_version = confluence.get_page_version(cf_page_id)
+                confluence.update_page(cf_page_id, title, final_body, current_version)
+                log.info(f"  ✓ Content written to copied page")
+            else:
+                # Create from scratch with full content in single API call.
+                # Ref: POST /wiki/api/v2/pages with "subtype": "live"
+                log.info(f"  → Creating Confluence page ({len(final_body)} chars)...")
+                created_page = confluence.create_page(
+                    CONFLUENCE_SPACE_KEY, title, final_body, parent_id
+                )
+                cf_page_id = str(created_page["id"])
+                cf_url = f"{confluence.base}/wiki/spaces/{CONFLUENCE_SPACE_KEY}/pages/{cf_page_id}"
+                log.info(f"  ✓ Page created with full content: {cf_url}")
 
-            # ── Phase 6: Lock notion_created_date via edit restriction ─────────
-            # Non-fatal: restriction failure does not roll back the migrated page
-            if admin_account_id:
-                log.info(f"  → Applying edit restriction...")
-                confluence.apply_edit_restriction(cf_page_id, admin_account_id)
+            # ── Phase 5: Upload attachments (images, files, PDFs) ─────────────
+            has_attachments = any(
+                b.get("type") in ("image", "file", "pdf") for b in blocks
+            )
+            if has_attachments:
+                log.info(f"  → Uploading attachments...")
+                attachment_map = {}
+                content_html_with_att = blocks_to_storage(
+                    blocks, confluence, cf_page_id, attachment_map
+                )
+                final_body_with_att = props_macro + content_html_with_att
+                current_version = confluence.get_page_version(cf_page_id)
+                confluence.update_page(
+                    cf_page_id, title, final_body_with_att, current_version
+                )
+                log.info(f"  ✓ Attachments uploaded and page updated")
 
             # ── Phase 7: Write Confluence URL back to Jira ────────────────────
             jira_key = props.get("_jira_issue_link", "")
@@ -1334,8 +1243,6 @@ def run_migration(notion: NotionClient, confluence: ConfluenceClient,
                     log.warning(f"  ⚠ Jira update non-fatal: {je}")
 
             # ── Phase 8: Mark as DONE ─────────────────────────────────────────
-            # Page content is successfully migrated at this point regardless of
-            # whether restriction or Jira backlink succeeded
             update_build_sheet_row(pid, cf_page_id, cf_url, jira_key, "DONE")
             log.info(f"  ✓ DONE: {title}")
 
@@ -1343,8 +1250,6 @@ def run_migration(notion: NotionClient, confluence: ConfluenceClient,
             err_msg = f"{type(e).__name__}: {str(e)[:200]}"
             log.error(f"  ✗ FAILED [{title}]: {err_msg}")
             log.debug(traceback.format_exc())
-            # If page was created before the error, record its ID so it isn't
-            # re-created on retry (idempotent: find_page_by_title will skip it)
             partial_id = locals().get("cf_page_id", "")
             partial_url = locals().get("cf_url", "")
             update_build_sheet_row(pid, partial_id, partial_url, "", "ERROR", err_msg)
@@ -1355,11 +1260,6 @@ def run_migration(notion: NotionClient, confluence: ConfluenceClient,
 # ─────────────────────────────────────────────
 
 def validate_credentials() -> dict:
-    """
-    Validates all required environment variables are set.
-    Does NOT make API calls — purely checks env presence.
-    Returns dict of {name: value} for all creds.
-    """
     required = {
         "NOTION_TOKEN"         : "Notion integration secret",
         "CONFLUENCE_BASE_URL"  : "e.g. https://yoursite.atlassian.net",
@@ -1369,7 +1269,6 @@ def validate_credentials() -> dict:
         "JIRA_EMAIL"           : "Jira account email",
         "JIRA_API_TOKEN"       : "Jira API token",
         "CONFLUENCE_SPACE_KEY" : "Target Confluence space key",
-        "CONFLUENCE_ADMIN_ACCOUNT_ID": "Atlassian accountId for restriction lock",
     }
     missing = []
     creds = {}
@@ -1378,7 +1277,6 @@ def validate_credentials() -> dict:
         if not val:
             missing.append(f"  {key}  ({desc})")
         creds[key] = val
-
     if missing:
         log.error("Missing required environment variables:")
         for m in missing:
@@ -1403,10 +1301,11 @@ def main():
     if not DRY_RUN:
         batch_desc = f"ALL pages" if BATCH_SIZE == 0 else f"Batch {BATCH_NUMBER} ({BATCH_SIZE} pages)"
         log.info(f"Batch        : {batch_desc}")
+        if USE_TEMPLATE_PAGE_ID:
+            log.info(f"Template     : {USE_TEMPLATE_PAGE_ID}")
     log.info("=" * 60)
 
     creds = validate_credentials()
-
     notion = NotionClient(creds.get("NOTION_TOKEN", "placeholder"))
 
     if not DRY_RUN:
@@ -1420,27 +1319,14 @@ def main():
             creds["JIRA_EMAIL"],
             creds["JIRA_API_TOKEN"],
         )
-        admin_id = creds.get("CONFLUENCE_ADMIN_ACCOUNT_ID", "")
     else:
         confluence = None
         jira = None
-        admin_id = ""
 
-    # Verify accountId on first live run (helps catch wrong CONFLUENCE_ADMIN_ACCOUNT_ID)
-    if not DRY_RUN and confluence:
-        log.info("Verifying Confluence account ID...")
-        verified_id = confluence.get_my_account_id()
-        if verified_id and verified_id != creds.get("CONFLUENCE_ADMIN_ACCOUNT_ID", ""):
-            log.warning("⚠ CONFLUENCE_ADMIN_ACCOUNT_ID in .env does not match your actual")
-            log.warning(f"  accountId. Update .env: CONFLUENCE_ADMIN_ACCOUNT_ID={verified_id}")
-            admin_id = verified_id   # auto-correct for this run
-
-    # Phase 0 — always runs (build sheet is safe even in dry run)
     all_props = run_phase_0_build_sheet(notion)
 
-    # Phases 1–4 — only runs when DRY_RUN=False
     if not DRY_RUN:
-        run_migration(notion, confluence, jira, admin_id, all_props)
+        run_migration(notion, confluence, jira, all_props)
 
     log.info("=" * 60)
     log.info(f"Run complete. Build sheet: {BUILD_SHEET_PATH}")
