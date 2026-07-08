@@ -76,12 +76,13 @@ const WORK_TYPE_SCHEME_NAME = 'santhoshOS Work Type Scheme';
 const ALLOWED_WORK_TYPES = ['Epic', 'Task', 'Sub-task']; // Story, Bug excluded
 
 const STATUS_CONFIG = [
-  { name: 'New', category: 'TODO' },
-  { name: 'Backlog', category: 'TODO' },
-  { name: 'In Progress', category: 'IN_PROGRESS' },
-  { name: 'Deferred', category: 'IN_PROGRESS' },
-  { name: 'Done', category: 'DONE' },
-  { name: 'Archived', category: 'DONE' },
+  { name: '🆕 NEW', category: 'TODO' },
+  { name: '🗄️ BACKLOG', category: 'TODO' },
+  { name: '🛤️ IN PROGRESS', category: 'IN_PROGRESS' },
+  { name: '🈴 DEFFERED', category: 'IN_PROGRESS' },
+  { name: '🔴 BLOCKED', category: 'IN_PROGRESS' },
+  { name: '🟢 DONE', category: 'DONE' },
+  { name: '🏛️ ARCHIVED', category: 'DONE' },
 ];
 const WORKFLOW_NAME = 'santhoshos default project workflow';
 const WORKFLOW_SCHEME_NAME = 'santhoshOS Workflow Scheme';
@@ -94,13 +95,38 @@ const SCREEN_SCHEME_NAME = 'santhoshOS Screen Scheme';
 const ISSUE_TYPE_SCREEN_SCHEME_NAME = 'santhoshOS Issue Type Screen Scheme';
 
 const SYSTEM_FIELD_TABS = [
-  { fieldId: 'summary', tab: 'default' },
-  { fieldId: 'description', tab: 'default' },
-  { fieldId: 'labels', tab: 'default' },
-  { fieldId: 'components', tab: 'default' },
-  { fieldId: 'timetracking', tab: 'default' },
-  { fieldId: 'duedate', tab: 'default' },
-  { fieldId: 'parent', tab: 'relational' },
+  { fieldId: 'issuetype', tab: '🈷️ Default' }, // Issue Type
+  { fieldId: 'summary', tab: '🈷️ Default' }, //Summary
+  { fieldId: 'description', tab: '🈷️ Default' }, //Description
+  { fieldId: 'priority', tab: '🈷️ Default' }, // Priority
+  { fieldId: 'labels', tab: '🈷️ Default' }, // Labels
+  { fieldId: 'customfield_10015', tab: '🈷️ Default' },// Start Date - no time
+  { fieldId: 'duedate', tab: '🈷️ Default' }, // Due Date - no time
+  { fieldId: 'components', tab: '🈷️ Default' }, //Components
+  { fieldId: 'customfield_10130', tab: '🈷️ Default' },// Components Category
+  { fieldId: 'customfield_10034', tab: '🚀 Spaces' }, // Atlassian Project
+  { fieldId: 'customfield_10028', tab: '🚀 Spaces' }, // Atlassian Goals
+  { fieldId: 'customfield_10011', tab: '🚀 Spaces' }, // Epic Name
+  { fieldId: 'parent', tab: '🚀 Spaces' }, // Parent
+  { fieldId: 'customfield_10095', tab: '🚀 Spaces' }, // ClickUp Task ID URL
+  { fieldId: 'customfield_10093', tab: '🚀 Spaces' }, // Rize ID
+  { fieldId: 'customfield_10092', tab: '🚀 Spaces' }, // Rize Time Entry ID
+  { fieldId: 'customfield_10094', tab: '🚀 Spaces' }, // Confluence PAge
+  { fieldId: 'customfield_10011', tab: '🚀 Spaces' },
+
+
+  { fieldId: 'customfield_10018', tab: '🖇️ Relational' }, // PArent Link
+  { fieldId: 'customfield_10014', tab: '🖇️ Relational' },// Epic Link
+  { fieldId: 'customfield_10012', tab: '🖇️ Relational' },// Epic Status
+  { fieldId: 'customfield_10094', tab: '🖇️ Relational' },// Confluence Page
+  { fieldId: 'customfield_10080', tab: '🖇️ Relational' }, // Reference URL(s)
+  { fieldId: 'issuelinks', tab: '🖇️ Relational' }, // Linked Issues
+  { fieldId: 'parent', tab: '🖇️ Relational' },
+
+  { fieldId: 'customfield_10081', tab: '⏰ Time Tracking' }, // Estimated Time
+  { fieldId: 'timetracking', tab: '⏰ Time Tracking' },
+  { fieldId: 'timetracking', tab: '⏰ Time Tracking' },
+
 ];
 
 // ==================== CREDENTIALS / CORE HELPERS ====================
