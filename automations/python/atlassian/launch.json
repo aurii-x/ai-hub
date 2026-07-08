@@ -1,0 +1,39 @@
+{
+    // Save this file as .vscode/launch.json inside your project folder
+    // Then press F5 in VS Code to run the script
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Notion→Confluence: Dry Run",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/notion_to_confluence.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "envFile": "${workspaceFolder}/.env",
+            // DRY_RUN is controlled inside the script (set to True)
+            // This config just ensures .env is loaded and terminal is visible
+            "presentation": {
+                "group": "migration",
+                "order": 1
+            }
+        },
+        {
+            "name": "Notion→Confluence: Live Batch",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/notion_to_confluence.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "envFile": "${workspaceFolder}/.env",
+            "presentation": {
+                "group": "migration",
+                "order": 2
+            }
+            // Before running this:
+            //   1. Set DRY_RUN = False in the script
+            //   2. Set BATCH_SIZE = 5 (or your preferred number)
+            //   3. Set BATCH_NUMBER = 0 (increment after each batch)
+        }
+    ]
+}
