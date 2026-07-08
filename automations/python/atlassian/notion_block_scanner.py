@@ -40,16 +40,15 @@ MAX_PAGES      = 0     # 0 = all pages; set to e.g. 20 to sample
 # All 8 Mission Control databases
 # Name → Notion database ID
 DATABASES = {
-    "01. Career Development" : "37761870-08a2-819a-bac9-000bda5d7c0e",
+    "01. Career Development" : "37761870-08a2-811f-a3d7-000ca47d0ec7",
     "02. Learning"           : "37761870-08a2-819a-a709-000b1ee1c40f",
-    "03. Family & Life"      : "37761870-08a2-819a-ba21-000b4d6f02da",
-    "04. Tech & Tinkering"   : "37761870-08a2-819a-9c54-000bfd08f5cb",
-    "05. News & Articles"    : "37761870-08a2-819a-8cce-000b07e28b54",
+    "03. Family & Life"      : "37761870-08a2-8116-a725-000b136c7722",
+    "04. Tech & Tinkering"   : "37761870-08a2-81bb-b279-000be6527130",
+    "05. News & Articles"    : "37761870-08a2-810f-b932-000bcdae4f04",
     "06. Work"               : "37761870-08a2-8199-941a-c6e481ccf03e",
-    "07. Divorce"            : "37761870-08a2-819a-8d47-000b0ce0abcb",
+    "07. Divorce"            : "37761870-08a2-8133-a656-000b8f1fbe4d",
     "08. Faith & Spiritual"  : "37761870-08a2-81ad-b250-000bbea73438",
 }
-
 # ─────────────────────────────────────────────
 # CONFLUENCE MAPPING TABLE
 # Notion block type → recommended Confluence storage format element
