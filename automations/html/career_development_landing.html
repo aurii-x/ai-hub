@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Career Development</title>
+<style>
+  :root {
+    --bg: #F6F7F9;
+    --panel: #FFFFFF;
+    --ink: #1B2430;
+    --ink-soft: #5B6472;
+    --line: #E3E6EB;
+    --accent: #1B5E5E;
+    --accent-soft: #E5F0EF;
+    --amber: #B8863B;
+    --amber-soft: #FBF3E6;
+    --radius: 10px;
+    --font-display: Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
+    --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 28px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+
+  header.page-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  header.page-head h1 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 26px;
+    letter-spacing: 0.2px;
+    margin: 0;
+    color: var(--ink);
+  }
+  header.page-head .eyebrow {
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    display: block;
+    margin-bottom: 4px;
+  }
+  header.page-head .stamp {
+    font-size: 12px;
+    color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: 18px;
+  }
+  @media (max-width: 760px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    margin-bottom: 18px;
+  }
+  .panel h2 {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 700;
+    margin: 0 0 14px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink);
+  }
+  .panel h2 .count {
+    font-family: var(--font-body);
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 2px 8px;
+    border-radius: 100px;
+  }
+
+  /* --- Open Tasks --- */
+  .task-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .task-row:last-child { border-bottom: none; }
+  .task-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--amber);
+    margin-top: 5px;
+    flex-shrink: 0;
+  }
+  .task-dot.done { background: #8FAF8F; }
+  .task-body { flex: 1; min-width: 0; }
+  .task-name { font-weight: 500; color: var(--ink); }
+  .task-meta {
+    font-size: 12px; color: var(--ink-soft); margin-top: 2px;
+    display: flex; gap: 10px; flex-wrap: wrap;
+  }
+  .task-meta .tag {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    padding: 1px 7px;
+    border-radius: 5px;
+    font-size: 11px;
+  }
+  .empty-note {
+    font-size: 12px; color: var(--ink-soft); font-style: italic;
+    padding: 8px 0;
+  }
+
+  /* --- Companies (collapsible) --- */
+  .company {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+  .company summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    background: var(--panel);
+    transition: background 0.15s ease;
+  }
+  .company summary:hover { background: var(--bg); }
+  .company summary::-webkit-details-marker { display: none; }
+  .company summary .chev {
+    font-size: 11px;
+    color: var(--ink-soft);
+    transition: transform 0.18s ease;
+  }
+  .company[open] summary .chev { transform: rotate(90deg); }
+  .company summary .co-name { display: flex; align-items: center; gap: 8px; }
+  .company summary .co-count {
+    font-size: 11px; font-weight: 500; color: var(--ink-soft);
+  }
+  .project-list {
+    padding: 4px 14px 12px 14px;
+    background: var(--bg);
+  }
+  .project-item {
+    padding: 8px 0 8px 18px;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  .project-item:last-child { border-bottom: none; }
+  .project-item::before {
+    content: "";
+    position: absolute;
+    left: 4px; top: 15px;
+    width: 6px; height: 1px;
+    background: var(--ink-soft);
+  }
+  .project-item .p-name { font-weight: 500; }
+  .project-item .p-role { font-size: 12px; color: var(--ink-soft); }
+
+  /* --- Projects (flat) --- */
+  .project-flat {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .project-flat:last-child { border-bottom: none; }
+  .project-flat .p-title { font-weight: 500; }
+  .project-flat .p-co { font-size: 12px; color: var(--ink-soft); }
+  .status-pill {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 100px;
+    background: var(--amber-soft);
+    color: var(--amber);
+    white-space: nowrap;
+  }
+  .status-pill.complete { background: var(--accent-soft); color: var(--accent); }
+
+  /* --- Docs --- */
+  .doc-link {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--line);
+    text-decoration: none;
+    color: var(--ink);
+  }
+  .doc-link:last-child { border-bottom: none; }
+  .doc-icon {
+    width: 26px; height: 26px;
+    border-radius: 6px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .doc-title { font-weight: 500; font-size: 13px; }
+  .doc-sub { font-size: 11px; color: var(--ink-soft); }
+
+  .edit-note {
+    margin-top: 26px;
+    padding: 12px 16px;
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--ink-soft);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="page-head">
+    <div>
+      <span class="eyebrow">santhoshOS · 1.x</span>
+      <h1>Career Development</h1>
+    </div>
+    <div class="stamp" id="stamp"></div>
+  </header>
+
+  <div class="grid">
+
+    <!-- LEFT COLUMN -->
+    <div>
+      <div class="panel">
+        <h2>Open Tasks <span class="count" id="open-count">0</span></h2>
+        <div id="open-tasks-list">
+          <!-- Sample rows — replace with your real open items -->
+          <div class="task-row">
+            <div class="task-dot"></div>
+            <div class="task-body">
+              <div class="task-name">Follow up on Lenovo Director interview</div>
+              <div class="task-meta"><span class="tag">1.2 Job Search</span><span>Due Jul 15</span></div>
+            </div>
+          </div>
+          <div class="task-row">
+            <div class="task-dot"></div>
+            <div class="task-body">
+              <div class="task-name">Update ResumeOS v2.0 for AI PM roles</div>
+              <div class="task-meta"><span class="tag">1.3 Resume Updates</span><span>No due date</span></div>
+            </div>
+          </div>
+          <div class="task-row">
+            <div class="task-dot"></div>
+            <div class="task-body">
+              <div class="task-name">Deep work block: STAR story bank</div>
+              <div class="task-meta"><span class="tag">1.1 Deep Work</span><span>Due Jul 18</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Companies</h2>
+        <details class="company">
+          <summary>
+            <span class="co-name"><span class="chev">▶</span> Lenovo</span>
+            <span class="co-count">2 projects</span>
+          </summary>
+          <div class="project-list">
+            <div class="project-item">
+              <div class="p-name">AI Delivery Roadmap — Director candidacy</div>
+              <div class="p-role">Interview process, 2026</div>
+            </div>
+            <div class="project-item">
+              <div class="p-name">AURI — santhoshOS Roadmap presentation</div>
+              <div class="p-role">Take-home exercise</div>
+            </div>
+          </div>
+        </details>
+        <details class="company">
+          <summary>
+            <span class="co-name"><span class="chev">▶</span> Harman</span>
+            <span class="co-count">1 project</span>
+          </summary>
+          <div class="project-list">
+            <div class="project-item">
+              <div class="p-name">Automotive infotainment PM engagement</div>
+              <div class="p-role">Program management</div>
+            </div>
+          </div>
+        </details>
+        <details class="company">
+          <summary>
+            <span class="co-name"><span class="chev">▶</span> Ford</span>
+            <span class="co-count">1 project</span>
+          </summary>
+          <div class="project-list">
+            <div class="project-item">
+              <div class="p-name">Infotainment program management</div>
+              <div class="p-role">Technical Program Manager</div>
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <!-- RIGHT COLUMN -->
+    <div>
+      <div class="panel">
+        <h2>Projects</h2>
+        <div class="project-flat">
+          <div>
+            <div class="p-title">ResumeOS v2.0</div>
+            <div class="p-co">Personal — job search tooling</div>
+          </div>
+          <span class="status-pill">In Progress</span>
+        </div>
+        <div class="project-flat">
+          <div>
+            <div class="p-title">AURI Roadmap</div>
+            <div class="p-co">Lenovo — take-home exercise</div>
+          </div>
+          <span class="status-pill complete">Done</span>
+        </div>
+        <div class="project-flat">
+          <div>
+            <div class="p-title">STAR Story Bank</div>
+            <div class="p-co">Personal — interview prep</div>
+          </div>
+          <span class="status-pill">In Progress</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Docs</h2>
+        <a class="doc-link" href="#">
+          <div class="doc-icon">D</div>
+          <div>
+            <div class="doc-title">Master Resume — source doc</div>
+            <div class="doc-sub">Notion</div>
+          </div>
+        </a>
+        <a class="doc-link" href="#">
+          <div class="doc-icon">D</div>
+          <div>
+            <div class="doc-title">Job Search — cost tracking</div>
+            <div class="doc-sub">Notion</div>
+          </div>
+        </a>
+        <a class="doc-link" href="#">
+          <div class="doc-icon">D</div>
+          <div>
+            <div class="doc-title">Interview prep notes</div>
+            <div class="doc-sub">ClickUp Doc</div>
+          </div>
+        </a>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="edit-note">
+    This is a static panel — edit the HTML directly (open tasks, companies/projects,
+    docs) to update content, or replace with a fresh export periodically. Live
+    ClickUp data isn't pulled in automatically, since that would require exposing
+    an API token inside this embed.
+  </div>
+
+</div>
+
+<script>
+  // Update the "open tasks" count automatically based on how many rows exist
+  document.getElementById('open-count').textContent =
+    document.querySelectorAll('#open-tasks-list .task-row').length;
+
+  // Timestamp so you can see at a glance how stale this snapshot is
+  document.getElementById('stamp').textContent =
+    'Updated ' + new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+</script>
+
+</body>
+</html>
